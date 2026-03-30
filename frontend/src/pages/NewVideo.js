@@ -133,12 +133,38 @@ export default function NewVideo() {
         templateId: project.templateId,
       }, { withCredentials: true });
       setProjectDbId(data._id);
+      
+      // Upload audio file if exists
+      if (project.audioFile) {
+        await uploadAudioFile(data._id, project.audioFile);
+      }
+      
       return data._id;
     } catch (err) {
       console.error('Failed to create project:', err);
       return null;
     } finally {
       setSaving(false);
+    }
+  };
+
+  const uploadAudioFile = async (projId, audioFile) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', audioFile);
+      
+      const { data } = await axios.post(
+        `${API}/audio/upload/${projId}`,
+        formData,
+        { 
+          withCredentials: true,
+          headers: { 'Content-Type': 'multipart/form-data' }
+        }
+      );
+      
+      updateProject({ audioDuration: data.duration });
+    } catch (err) {
+      console.error('Failed to upload audio:', err);
     }
   };
 
@@ -185,6 +211,24 @@ export default function NewVideo() {
     if (currentStep === 1 && !projectDbId) {
       await createProject();
     }
+    
+    // Extract climax audio when leaving Step 2
+    if (currentStep === 2 && projectDbId && project.audioFile) {
+      try {
+        await axios.post(
+          `${API}/audio/extract-climax/${projectDbId}`,
+          {
+            projectId: projectDbId,
+            start: project.climaxStart,
+            end: project.climaxEnd
+          },
+          { withCredentials: true }
+        );
+      } catch (err) {
+        console.error('Failed to extract climax:', err);
+      }
+    }
+    
     if (currentStep < 7) {
       setCurrentStep(currentStep + 1);
     }

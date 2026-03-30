@@ -1,7 +1,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import FileResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -9,7 +10,7 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
@@ -18,6 +19,11 @@ import secrets
 from cryptography.fernet import Fernet
 import base64
 import hashlib
+import httpx
+import aiofiles
+import json
+import subprocess
+import asyncio
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -559,6 +565,503 @@ async def get_stats(request: Request):
 @api_router.get("/")
 async def root():
     return {"message": "Music Video Factory API"}
+
+# ========================================
+# AUDIO PROCESSING ENDPOINTS
+# ========================================
+
+# Ensure projects directory exists
+PROJECTS_DIR = Path("/app/projects")
+PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+
+class AudioUploadResponse(BaseModel):
+    success: bool
+    audioPath: str
+    duration: float
+
+class ClimaxDetectionResponse(BaseModel):
+    start: float
+    end: float
+    duration: float
+    message: str
+
+class ClimaxExtractionRequest(BaseModel):
+    projectId: str
+    start: float
+    end: float
+
+@api_router.post("/audio/upload/{project_id}")
+async def upload_audio(project_id: str, request: Request, file: UploadFile = File(...)):
+    """Upload audio file for a project"""
+    user = await get_current_user(request)
+    
+    # Verify project ownership
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Check file type
+    if not file.content_type or not file.content_type.startswith('audio/'):
+        raise HTTPException(status_code=400, detail="Invalid file type. Must be audio file.")
+    
+    # Create project audio directory
+    project_dir = PROJECTS_DIR / project_id / "audio"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save file
+    audio_path = project_dir / "original.mp3"
+    async with aiofiles.open(audio_path, 'wb') as f:
+        content = await file.read()
+        await f.write(content)
+    
+    # Get audio duration using ffprobe
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', str(audio_path)],
+            capture_output=True, text=True
+        )
+        duration_info = json.loads(result.stdout)
+        duration = float(duration_info['format']['duration'])
+    except Exception as e:
+        logger.error(f"Failed to get audio duration: {e}")
+        duration = 0
+    
+    # Update project
+    await db.projects.update_one(
+        {"_id": ObjectId(project_id)},
+        {"$set": {"audioOriginalPath": str(audio_path), "audioDuration": duration}}
+    )
+    
+    return {"success": True, "audioPath": str(audio_path), "duration": duration}
+
+@api_router.post("/audio/detect-climax/{project_id}")
+async def detect_climax(project_id: str, request: Request):
+    """Auto-detect the climax section using librosa RMS energy analysis"""
+    user = await get_current_user(request)
+    
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    audio_path = project.get("audioOriginalPath")
+    if not audio_path or not Path(audio_path).exists():
+        raise HTTPException(status_code=400, detail="No audio file uploaded")
+    
+    try:
+        import librosa
+        import numpy as np
+        
+        # Load audio
+        y, sr = librosa.load(audio_path, sr=22050)
+        duration = librosa.get_duration(y=y, sr=sr)
+        
+        # Calculate RMS energy
+        hop_length = 512
+        rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+        
+        # Convert frames to time
+        times = librosa.frames_to_time(range(len(rms)), sr=sr, hop_length=hop_length)
+        
+        # Find 35-45 second window with highest average energy
+        window_sizes = [35, 40, 45]  # Try different window sizes
+        best_start = 0
+        best_energy = 0
+        best_window = 40
+        
+        for window_sec in window_sizes:
+            window_frames = int(window_sec * sr / hop_length)
+            
+            for i in range(len(rms) - window_frames):
+                avg_energy = np.mean(rms[i:i + window_frames])
+                if avg_energy > best_energy:
+                    best_energy = avg_energy
+                    best_start = times[i]
+                    best_window = window_sec
+        
+        # Ensure we don't exceed audio duration
+        climax_start = max(0, best_start)
+        climax_end = min(duration, climax_start + best_window)
+        
+        # Update project
+        await db.projects.update_one(
+            {"_id": ObjectId(project_id)},
+            {"$set": {"climaxStart": climax_start, "climaxEnd": climax_end}}
+        )
+        
+        return {
+            "start": round(climax_start, 2),
+            "end": round(climax_end, 2),
+            "duration": round(climax_end - climax_start, 2),
+            "message": f"Climax detected at {int(climax_start//60)}:{int(climax_start%60):02d} - {int(climax_end//60)}:{int(climax_end%60):02d}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Climax detection failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Climax detection failed: {str(e)}")
+
+@api_router.post("/audio/extract-climax/{project_id}")
+async def extract_climax(project_id: str, data: ClimaxExtractionRequest, request: Request):
+    """Extract the climax section using ffmpeg"""
+    user = await get_current_user(request)
+    
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    audio_path = project.get("audioOriginalPath")
+    if not audio_path or not Path(audio_path).exists():
+        raise HTTPException(status_code=400, detail="No audio file uploaded")
+    
+    try:
+        project_dir = PROJECTS_DIR / project_id / "audio"
+        climax_path = project_dir / "climax.mp3"
+        
+        # Run ffmpeg to extract segment
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', audio_path,
+            '-ss', str(data.start),
+            '-to', str(data.end),
+            '-c', 'copy',
+            str(climax_path)
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise Exception(f"ffmpeg error: {result.stderr}")
+        
+        # Update project
+        await db.projects.update_one(
+            {"_id": ObjectId(project_id)},
+            {"$set": {
+                "audioClimaxPath": str(climax_path),
+                "climaxStart": data.start,
+                "climaxEnd": data.end
+            }}
+        )
+        
+        return {
+            "success": True,
+            "climaxPath": str(climax_path),
+            "duration": round(data.end - data.start, 2)
+        }
+        
+    except Exception as e:
+        logger.error(f"Climax extraction failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Climax extraction failed: {str(e)}")
+
+# ========================================
+# AI ANALYSIS ENDPOINTS (OpenAI)
+# ========================================
+
+class AnalyzeSongRequest(BaseModel):
+    projectId: str
+
+class AnalyzeSongResponse(BaseModel):
+    theme: str
+    mood: str
+    animationStyle: str
+    palette: List[str]
+    prompts: List[str]
+    hooks: List[str]
+
+async def get_user_openai_key(user_id: str) -> Optional[str]:
+    """Get user's decrypted OpenAI API key"""
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        return None
+    encrypted_key = user.get("apiKeys", {}).get("openai")
+    if not encrypted_key:
+        return None
+    return decrypt_api_key(encrypted_key)
+
+@api_router.post("/ai/analyze-song")
+async def analyze_song(data: AnalyzeSongRequest, request: Request):
+    """Analyze song with OpenAI GPT-4o-mini to generate visual concept"""
+    user = await get_current_user(request)
+    
+    # Get OpenAI key
+    openai_key = await get_user_openai_key(user["_id"])
+    if not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not configured. Please add it in Settings.")
+    
+    # Get project
+    project = await db.projects.find_one({"_id": ObjectId(data.projectId), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    title = project.get("title", "Untitled")
+    genre = project.get("genre", "Unknown")
+    lyrics = project.get("lyrics", "")
+    
+    if not lyrics:
+        raise HTTPException(status_code=400, detail="Please add lyrics to analyze the song")
+    
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "temperature": 0.8,
+                    "max_tokens": 1500,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": """You are a creative director for emotional music videos. Analyze this song deeply.
+Return ONLY valid JSON (no markdown, no code blocks) with exactly this structure:
+{
+  "theme": "visual theme description",
+  "mood": "overall mood and feeling",
+  "animationStyle": "camera movement and animation style description",
+  "palette": ["#hex1", "#hex2", "#hex3", "#hex4"],
+  "prompts": ["detailed image prompt 1 for 9:16 vertical, cinematic, emotional", "prompt 2", "prompt 3", "prompt 4", "prompt 5"],
+  "hooks": ["short emotional text phrase 1 max 8 words", "phrase 2", "phrase 3"]
+}"""
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Title: {title}\nGenre: {genre}\nLyrics:\n{lyrics[:3000]}"
+                        }
+                    ]
+                }
+            )
+            
+            if response.status_code != 200:
+                error_detail = response.json().get("error", {}).get("message", "Unknown error")
+                raise HTTPException(status_code=response.status_code, detail=f"OpenAI API error: {error_detail}")
+            
+            result = response.json()
+            content = result["choices"][0]["message"]["content"]
+            
+            # Parse JSON response
+            try:
+                # Clean up response if it has markdown code blocks
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                concept = json.loads(content.strip())
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse AI response: {content}")
+                raise HTTPException(status_code=500, detail="Failed to parse AI response")
+            
+            # Ensure all required fields exist
+            concept.setdefault("theme", "")
+            concept.setdefault("mood", "")
+            concept.setdefault("animationStyle", "")
+            concept.setdefault("palette", ["#1a1a2e", "#e94560", "#0f3460", "#f0a500"])
+            concept.setdefault("prompts", [])
+            concept.setdefault("hooks", [])
+            
+            # Update project concept
+            await db.projects.update_one(
+                {"_id": ObjectId(data.projectId)},
+                {"$set": {"concept": concept}}
+            )
+            
+            # Log cost
+            await db.cost_logs.insert_one({
+                "userId": user["_id"],
+                "projectId": data.projectId,
+                "date": datetime.now(timezone.utc).isoformat(),
+                "action": "analysis",
+                "provider": "openai",
+                "cost": 0.01,
+                "details": "GPT-4o-mini song analysis"
+            })
+            
+            # Update total cost
+            await db.projects.update_one(
+                {"_id": ObjectId(data.projectId)},
+                {"$inc": {"totalCost": 0.01}}
+            )
+            
+            return concept
+            
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="OpenAI API timeout. Please try again.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"AI analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
+
+# ========================================
+# IMAGE GENERATION ENDPOINTS (OpenAI)
+# ========================================
+
+class GenerateImageRequest(BaseModel):
+    projectId: str
+    prompt: str
+    imageIndex: int
+
+class GenerateImageResponse(BaseModel):
+    success: bool
+    imageUrl: str
+    imagePath: str
+    cost: float
+
+@api_router.post("/ai/generate-image")
+async def generate_image(data: GenerateImageRequest, request: Request):
+    """Generate a single image using OpenAI GPT Image 1"""
+    user = await get_current_user(request)
+    
+    # Get OpenAI key
+    openai_key = await get_user_openai_key(user["_id"])
+    if not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not configured. Please add it in Settings.")
+    
+    # Verify project
+    project = await db.projects.find_one({"_id": ObjectId(data.projectId), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Get user settings for image provider
+    full_user = await db.users.find_one({"_id": ObjectId(user["_id"])})
+    image_provider = full_user.get("settings", {}).get("imageProvider", "gpt-image-mini")
+    
+    # Determine quality and cost based on provider
+    if image_provider == "gpt-image-mini":
+        quality = "low"
+        cost_per_image = 0.005
+    elif image_provider == "gpt-image-1.5":
+        quality = "medium"
+        cost_per_image = 0.04
+    else:
+        quality = "low"
+        cost_per_image = 0.005
+    
+    try:
+        # Create project images directory
+        project_dir = PROJECTS_DIR / data.projectId / "images"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-image-1",
+                    "prompt": data.prompt,
+                    "n": 1,
+                    "size": "1024x1536",
+                    "quality": quality,
+                    "response_format": "b64_json"
+                }
+            )
+            
+            if response.status_code != 200:
+                error_detail = response.json().get("error", {}).get("message", "Unknown error")
+                raise HTTPException(status_code=response.status_code, detail=f"OpenAI API error: {error_detail}")
+            
+            result = response.json()
+            b64_image = result["data"][0]["b64_json"]
+            
+            # Decode and save image
+            image_data = base64.b64decode(b64_image)
+            image_filename = f"img_{data.imageIndex}.png"
+            image_path = project_dir / image_filename
+            
+            async with aiofiles.open(image_path, 'wb') as f:
+                await f.write(image_data)
+            
+            # Create URL path for frontend
+            image_url = f"/api/projects/{data.projectId}/images/{image_filename}"
+            
+            # Log cost
+            await db.cost_logs.insert_one({
+                "userId": user["_id"],
+                "projectId": data.projectId,
+                "date": datetime.now(timezone.utc).isoformat(),
+                "action": "image",
+                "provider": "openai",
+                "cost": cost_per_image,
+                "details": f"Image {data.imageIndex}: {data.prompt[:50]}..."
+            })
+            
+            # Update project total cost
+            await db.projects.update_one(
+                {"_id": ObjectId(data.projectId)},
+                {"$inc": {"totalCost": cost_per_image}}
+            )
+            
+            return {
+                "success": True,
+                "imageUrl": image_url,
+                "imagePath": str(image_path),
+                "cost": cost_per_image
+            }
+            
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Image generation timeout. Please try again.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Image generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
+
+# Serve project images
+@api_router.get("/projects/{project_id}/images/{filename}")
+async def get_project_image(project_id: str, filename: str, request: Request):
+    """Serve generated project images"""
+    user = await get_current_user(request)
+    
+    # Verify project ownership
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    image_path = PROJECTS_DIR / project_id / "images" / filename
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    return FileResponse(image_path, media_type="image/png")
+
+# Update project concept endpoint
+class UpdateConceptRequest(BaseModel):
+    concept: Dict[str, Any]
+
+@api_router.put("/projects/{project_id}/concept")
+async def update_project_concept(project_id: str, data: UpdateConceptRequest, request: Request):
+    """Update project visual concept"""
+    user = await get_current_user(request)
+    
+    result = await db.projects.update_one(
+        {"_id": ObjectId(project_id), "userId": user["_id"]},
+        {"$set": {"concept": data.concept}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    return {"success": True}
+
+# Update project images endpoint
+class UpdateImagesRequest(BaseModel):
+    images: List[Dict[str, Any]]
+
+@api_router.put("/projects/{project_id}/images")
+async def update_project_images(project_id: str, data: UpdateImagesRequest, request: Request):
+    """Update project images array"""
+    user = await get_current_user(request)
+    
+    result = await db.projects.update_one(
+        {"_id": ObjectId(project_id), "userId": user["_id"]},
+        {"$set": {"images": data.images}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    return {"success": True}
 
 # Include the router in the main app
 app.include_router(api_router)
