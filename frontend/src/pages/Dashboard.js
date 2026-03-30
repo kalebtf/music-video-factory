@@ -144,9 +144,10 @@ export default function Dashboard() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" data-testid="projects-grid">
             {projects.map((project) => (
-              <div
+              <Link
                 key={project._id}
-                className="bg-[#141418] border border-[#2a2a35] rounded-xl overflow-hidden hover:border-[#e94560]/50 transition-all cursor-pointer"
+                to={`/project/${project._id}`}
+                className="bg-[#141418] border border-[#2a2a35] rounded-xl overflow-hidden hover:border-[#e94560]/50 transition-all cursor-pointer block"
                 data-testid={`project-card-${project._id}`}
               >
                 {/* Thumbnail Placeholder */}
@@ -167,7 +168,7 @@ export default function Dashboard() {
                     <span className="text-[#e94560]">${(project.totalCost || 0).toFixed(2)}</span>
                   </div>
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         )}

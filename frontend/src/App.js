@@ -71,6 +71,14 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/project/:projectId"
+        element={
+          <ProtectedRoute>
+            <NewVideo />
+          </ProtectedRoute>
+        }
+      />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

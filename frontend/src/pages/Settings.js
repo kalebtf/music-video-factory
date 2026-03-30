@@ -55,12 +55,16 @@ export default function Settings() {
 
     setSavingKey(provider);
     try {
-      await axios.post(`${API}/settings/api-key`, { provider, apiKey }, { withCredentials: true });
-      setApiKeys({ ...apiKeys, [provider]: true });
-      setApiKeyInputs({ ...apiKeyInputs, [provider]: '' });
-      refreshUser();
+      const response = await axios.post(`${API}/settings/api-key`, { provider, apiKey }, { withCredentials: true });
+      if (response.data.success) {
+        setApiKeys({ ...apiKeys, [provider]: true });
+        setApiKeyInputs({ ...apiKeyInputs, [provider]: '' });
+        refreshUser();
+      }
     } catch (err) {
       console.error('Failed to save API key:', err);
+      // Show error to user
+      alert('Failed to save API key. Please try again.');
     } finally {
       setSavingKey('');
     }
