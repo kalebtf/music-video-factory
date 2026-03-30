@@ -1,0 +1,98 @@
+{
+  "theme": "dark",
+  "archetype": "Swiss Brutalist & High-Contrast Tech",
+  "colors": {
+    "background": "#0c0c0f",
+    "surface": "#141418",
+    "surface_hover": "#1e1e24",
+    "primary": "#e94560",
+    "primary_hover": "#f25a74",
+    "text": {
+      "main": "#f8f8f8",
+      "muted": "#8b8b99"
+    },
+    "border": "#2a2a35",
+    "status": {
+      "success": "#10b981",
+      "warning": "#f59e0b",
+      "error": "#ef4444"
+    }
+  },
+  "typography": {
+    "headings": {
+      "family": "Outfit, sans-serif",
+      "weights": ["500", "600", "700"],
+      "tracking": "tracking-tight",
+      "usage": "Use for all page titles, card headers, and emphasis numbers."
+    },
+    "body": {
+      "family": "Inter, sans-serif",
+      "weights": ["400", "500"],
+      "usage": "Use for forms, table data, subtitles, and general UI text."
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous spacing. Control Room layout for dashboards.",
+    "container_padding": "p-6 md:p-8",
+    "grid_gaps": "gap-6 md:gap-8",
+    "radius": "rounded-xl"
+  },
+  "components": {
+    "cards": {
+      "background": "bg-[#141418]",
+      "border": "border border-[#2a2a35]",
+      "radius": "rounded-xl",
+      "shadow": "none",
+      "padding": "p-6"
+    },
+    "buttons": {
+      "primary": "bg-[#e94560] text-white hover:bg-[#f25a74] transition-all font-medium rounded-lg px-4 py-2 flex items-center justify-center gap-2",
+      "secondary": "bg-[#141418] border border-[#2a2a35] text-[#f8f8f8] hover:bg-[#1e1e24] transition-all rounded-lg px-4 py-2 flex items-center justify-center gap-2"
+    },
+    "inputs": {
+      "background": "bg-[#0c0c0f]",
+      "border": "border border-[#2a2a35]",
+      "focus": "focus:ring-1 focus:ring-[#e94560] focus:border-[#e94560] focus:outline-none",
+      "text": "text-[#f8f8f8]",
+      "radius": "rounded-lg"
+    },
+    "header": {
+      "style": "sticky top-0 z-50 bg-[#0c0c0f]/80 backdrop-blur-xl border-b border-[#2a2a35] px-6 py-4 flex justify-between items-center"
+    }
+  },
+  "pages": {
+    "auth": {
+      "layout": "Centered flex container, min-h-screen bg-[#0c0c0f]. Add a subtle radial gradient blob behind the card using the accent color (#e94560) at 10% opacity for depth.",
+      "card": "Use standard card component. Clean Email/Password inputs, solid primary button taking full width."
+    },
+    "dashboard": {
+      "header": "Logo using a Video/Play icon colored in #e94560. App name 'Music Video Factory' in Outfit font. Settings icon aligned right.",
+      "stats_bar": "Flex row, items centered, separated by subtle borders or dots. Use the primary color #e94560 for numbers to create visual emphasis.",
+      "grid": "grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6. 'Control Room' dense layout.",
+      "empty_state": "Min-height 300px, border-2 border-dashed border-[#2a2a35] rounded-xl flex flex-col items-center justify-center text-[#8b8b99]. Include a Lucide video/film icon."
+    },
+    "settings": {
+      "layout": "Max-width 800px, mx-auto, vertical stack with gap-8. Each section is a separate card.",
+      "api_keys": "For each key: label, masked input, save button, and status icon (Check/X). Checkmark in #10b981, X in #ef4444.",
+      "cost_tracker": "Shadcn Table component. Clean borders (#2a2a35), muted headers (#8b8b99).",
+      "providers": "RadioGroup component. Selected state must have a border ring of #e94560."
+    }
+  },
+  "icons": {
+    "library": "lucide-react",
+    "install_command": "yarn add lucide-react",
+    "usage": "Use stroke-width 1.5 for a clean, premium tech look."
+  },
+  "testing": {
+    "requirement": "All interactive and key informational elements MUST include a data-testid attribute. Use kebab-case."
+  },
+  "instructions_to_main_agent": [
+    "Strictly adhere to the dark theme colors provided. Do not use generic grays; use the precise hex codes: Background #0c0c0f, Cards #141418, Accent #e94560, Border #2a2a35.",
+    "Implement 'Outfit' for headings and 'Inter' for body text via Google Fonts in your layout/CSS.",
+    "Ensure all cards use 1px solid borders (#2a2a35) without drop shadows to maintain the clean, flat tech look.",
+    "Use lucide-react for all icons. Represent the 'Music Video Factory' logo with a Video or Play icon in #e94560.",
+    "For the Auth page, create a subtle glowing background effect using a radial gradient with #e94560 at low opacity (e.g., bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#e94560]/10 to-[#0c0c0f]).",
+    "Implement the 'Cost Tracker' as a clean Shadcn Table inside the settings page. Make sure the total row stands out.",
+    "Include 'data-testid' on all buttons, inputs, links, and forms for reliable testing."
+  ]
+}
