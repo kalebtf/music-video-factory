@@ -538,7 +538,7 @@ async def get_stats(request: Request):
     month_logs = await db.cost_logs.find({
         "userId": user["_id"],
         "date": {"$gte": start_of_month.isoformat()}
-    }).to_list(1000)
+    }, {"cost": 1, "_id": 0}).to_list(1000)
     month_cost = sum(log.get("cost", 0) for log in month_logs)
     
     # This week's videos
