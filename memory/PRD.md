@@ -15,65 +15,77 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 3. Settings page with API key management (AES encrypted)
 4. Image/Video provider selection
 5. Cost tracking system
-6. Template system with 6 default templates seeded on registration
-7. 7-step video creation wizard
+6. Template system with 6 default templates
+7. 7-step video creation wizard with real AI integrations
 
 ## What's Been Implemented
 
-### Phase 1 (March 30, 2026)
-- [x] JWT Authentication (register, login, logout, refresh token, protected routes)
-- [x] Password hashing with bcrypt
-- [x] Dashboard with stats bar (Videos, Month Cost, Week Videos)
-- [x] Project grid with empty state
-- [x] Settings page with API Keys section (OpenAI, FAL.AI, Kling)
-- [x] Cost Tracker table with total
-- [x] Image/Video Provider radio buttons
-- [x] 6 default templates seeded on user registration
-- [x] Dark theme with specified colors
+### Phase 1 - Foundation (March 30, 2026)
+- [x] JWT Authentication (register, login, logout, refresh token)
+- [x] Dashboard with stats bar
+- [x] Settings page with API Keys management
+- [x] 6 default templates seeded on registration
+- [x] Dark theme UI
 
-### Phase 2 (March 30, 2026)
-- [x] Fixed API key save functionality (now persists with green checkmark)
-- [x] 7-step video creation wizard:
-  - Step 1: Song Input (title, genre, lyrics, audio upload, image upload, template selection, txt import)
-  - Step 2: Select Climax (wavesurfer.js waveform with draggable region)
-  - Step 3: Visual Concept (theme, mood, color palette, prompts, hooks)
-  - Step 4: Generate & Approve Images (placeholder with colored cards)
-  - Step 5: Animate Clips (placeholder with 3s delay simulation)
-  - Step 6: Assemble Video (clip reorder, crossfade, text overlay settings)
-  - Step 7: Export & Publish (download buttons, publishing info copy)
-- [x] Dashboard project cards link to /project/:id
-- [x] Progress bar showing all 7 steps
-- [x] Cost counter always visible at bottom
+### Phase 2 - Wizard UI (March 30, 2026)
+- [x] 7-step video creation wizard
+- [x] Step 1: Song Input (title, genre, lyrics, audio upload, templates)
+- [x] Step 2: Climax Selection (waveform visualization)
+- [x] Step 3: Visual Concept (theme, mood, prompts, hooks)
+- [x] Step 4: Image Generation (placeholder)
+- [x] Step 5: Animate Clips (placeholder)
+- [x] Step 6: Assemble Video (placeholder)
+- [x] Step 7: Export & Publish (placeholder)
 
-## Database Schemas
-- **User**: email, password_hash, apiKeys (encrypted), settings, createdAt
-- **Project**: userId, title, genre, lyrics, templateId, status, audio paths, concept, images, clips, finalVideoPath, totalCost, createdAt
-- **CostLog**: userId, projectId, date, action, provider, cost, details
-- **Template**: userId, name, emoji, visualStyle, imagePrompts[], animationStyle, textHooks[], colorPalette[], isDefault
+### Phase 3 - Real AI Integrations (March 30, 2026)
+- [x] Audio upload to server with duration detection (ffprobe)
+- [x] Audio player controls (Play/Pause/Stop) in Step 2
+- [x] Manual time input for climax start/end
+- [x] Auto-detect climax using librosa RMS energy analysis
+- [x] Extract climax segment using ffmpeg
+- [x] AI song analysis with GPT-4o-mini (theme, mood, prompts, hooks)
+- [x] Real image generation with OpenAI GPT Image 1 (gpt-image-1)
+- [x] Cost logging for all AI operations
+- [x] Proper error handling when API key not configured
 
-## Mocked APIs (Placeholders)
-- Image generation: Creates colored placeholder cards after 2s delay
-- Video clip generation: Simulates with 3s delay
-- Video assembly: Simulates with 3s delay
-- Auto-detect climax: Sets region to middle portion of audio
+## API Endpoints Added in Phase 3
+- POST /api/audio/upload/{project_id} - Upload audio file
+- POST /api/audio/detect-climax/{project_id} - Auto-detect climax using librosa
+- POST /api/audio/extract-climax/{project_id} - Extract climax segment with ffmpeg
+- POST /api/ai/analyze-song - Analyze song with GPT-4o-mini
+- POST /api/ai/generate-image - Generate image with GPT Image 1
+- GET /api/projects/{project_id}/images/{filename} - Serve generated images
+- PUT /api/projects/{project_id}/concept - Update project concept
+- PUT /api/projects/{project_id}/images - Update project images
+
+## Dependencies Added
+- librosa (audio analysis)
+- numpy (numerical computing)
+- ffmpeg (system package for audio extraction)
+- httpx (async HTTP client for OpenAI API)
+- aiofiles (async file operations)
+
+## Cost Structure
+- GPT-4o-mini analysis: $0.01 per song
+- GPT Image 1 Mini (quality="low"): $0.005 per image
+- GPT Image 1.5 (quality="medium"): $0.04 per image
 
 ## Prioritized Backlog
-### P0 (Phase 3 - Critical)
-- [ ] Connect real image generation API (OpenAI GPT Image)
-- [ ] Connect real video generation API (FAL.AI)
-- [ ] Audio file upload to server storage
-- [ ] Real climax detection algorithm
+### P0 (Phase 4 - Critical)
+- [ ] Connect video generation API (FAL.AI Wan 2.6)
+- [ ] Video clip animation from images
+- [ ] Video assembly with transitions
+- [ ] Real video download functionality
 
-### P1 (Phase 3 - High)
+### P1 (Phase 4 - High)
 - [ ] Video preview playback
-- [ ] Real download functionality
-- [ ] Project status updates in database
+- [ ] Subtitles from lyrics
+- [ ] Text overlay rendering
 
 ### P2 (Future)
+- [ ] Kling direct integration
 - [ ] Bulk video generation
-- [ ] Custom templates
 - [ ] Social media direct posting
-- [ ] Analytics dashboard
 
 ## Test Credentials
 - Email: test@example.com
