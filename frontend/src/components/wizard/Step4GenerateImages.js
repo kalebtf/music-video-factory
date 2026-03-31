@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Image as ImageIcon, Check, X, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
 import api from '../../lib/api';
+import { AuthImage } from '../AuthImage';
 
 const PLACEHOLDER_COLORS = ['#e94560', '#0f3460', '#f0a500', '#16213e', '#53d769', '#8b5cf6', '#00b4d8', '#ff6b35'];
 
@@ -14,7 +15,7 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
   // Initialize with uploaded images if any
   useEffect(() => {
     if (project.uploadedImages.length > 0 && project.images.length === 0) {
-      const uploadedAsImages = project.uploadedImages.map((img, i) => ({
+      const uploadedAsImages = project.uploadedImages.map((img) => ({
         id: img.id,
         url: img.url,
         prompt: 'User uploaded image',
@@ -25,11 +26,6 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
       updateProject({ images: uploadedAsImages });
     }
   }, []);
-
-  // Get cost per image based on user settings
-  const getCostPerImage = () => {
-    return 0.005; // GPT Image 1 Mini default
-  };
 
   const handleGenerate = async () => {
     if (!projectId) {
@@ -63,13 +59,17 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
       isUploaded: false,
     }));
 
-    updateProject({ images: [...uploadedImages, ...newImages] });
+    const allImages = [...uploadedImages, ...newImages];
+    updateProject({ images: allImages });
 
     // Generate images one by one
     let totalCost = 0;
     for (let i = 0; i < prompts.length; i++) {
       setGeneratingIndex(i);
       
+      const imgIndex = uploadedImages.length + i;
+      const imageId = allImages[imgIndex]?.id;
+
       try {
         const { data } = await api.post(
           '/ai/generate-image',
@@ -80,18 +80,21 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
           }
         );
 
-        // Update the specific image with the result
+        const fullUrl = `${process.env.REACT_APP_BACKEND_URL}${data.imageUrl}`;
+
+        // Update the specific image with the result — using function form
         updateProject(prev => {
-          const updatedImages = [...prev.images];
-          const imgIndex = uploadedImages.length + i;
-          if (updatedImages[imgIndex]) {
-            updatedImages[imgIndex] = {
-              ...updatedImages[imgIndex],
-              url: `${process.env.REACT_APP_BACKEND_URL}${data.imageUrl}`,
-              status: 'pending',
-              cost: data.cost,
-            };
-          }
+          const updatedImages = prev.images.map(img =>
+            img.id === imageId
+              ? {
+                  ...img,
+                  url: fullUrl,
+                  imagePath: data.imagePath || '',
+                  status: 'pending',
+                  cost: data.cost,
+                }
+              : img
+          );
           return { images: updatedImages };
         });
 
@@ -102,15 +105,11 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
         
         // Update image to show error state
         updateProject(prev => {
-          const updatedImages = [...prev.images];
-          const imgIndex = uploadedImages.length + i;
-          if (updatedImages[imgIndex]) {
-            updatedImages[imgIndex] = {
-              ...updatedImages[imgIndex],
-              status: 'error',
-              error: errorMsg,
-            };
-          }
+          const updatedImages = prev.images.map(img =>
+            img.id === imageId
+              ? { ...img, status: 'error', error: errorMsg }
+              : img
+          );
           return { images: updatedImages };
         });
       }
@@ -126,6 +125,24 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
 
     setGeneratingIndex(null);
     setGenerating(false);
+
+    // Persist images to DB
+    if (projectId) {
+      try {
+        const imagesToSave = project.images.map(img => ({
+          id: img.id,
+          url: img.url || '',
+          prompt: img.prompt || '',
+          status: img.status || 'pending',
+          cost: img.cost || 0,
+          isUploaded: img.isUploaded || false,
+          imagePath: img.imagePath || '',
+        }));
+        await api.put(`/projects/${projectId}/images`, { images: imagesToSave });
+      } catch (err) {
+        console.error('Failed to persist images:', err);
+      }
+    }
   };
 
   const handleRegenerate = async (imageId, index) => {
@@ -152,12 +169,15 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
         }
       );
 
+      const fullUrl = `${process.env.REACT_APP_BACKEND_URL}${data.imageUrl}`;
+
       updateProject(prev => {
         const updatedImages = prev.images.map(img =>
           img.id === imageId
             ? {
                 ...img,
-                url: `${process.env.REACT_APP_BACKEND_URL}${data.imageUrl}`,
+                url: fullUrl,
+                imagePath: data.imagePath || '',
                 status: 'pending',
                 cost: img.cost + data.cost,
                 feedback: feedbackText[imageId] || '',
@@ -285,7 +305,7 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
                   ? 'border-[#f59e0b]'
                   : 'border-[#2a2a35]'
               }`}
-              data-testid={`image-card-${image.id}`}
+              data-testid={`image-card-${index}`}
             >
               {/* Image */}
               <div className="aspect-[9/16] relative">
@@ -306,7 +326,7 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
                     <span className="text-[#ef4444] text-sm text-center">{image.error || 'Generation failed'}</span>
                   </div>
                 ) : image.url ? (
-                  <img
+                  <AuthImage
                     src={image.url}
                     alt={image.prompt}
                     className="w-full h-full object-cover"
@@ -344,7 +364,7 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
                     <button
                       onClick={() => handleApprove(image.id)}
                       className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-[#10b981] text-white rounded-lg hover:bg-[#059669] transition-all text-sm"
-                      data-testid={`approve-${image.id}`}
+                      data-testid={`approve-${index}`}
                     >
                       <Check className="w-4 h-4" />
                       Approve
@@ -352,7 +372,7 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
                     <button
                       onClick={() => handleReject(image.id)}
                       className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-[#ef4444] text-white rounded-lg hover:bg-[#dc2626] transition-all text-sm"
-                      data-testid={`reject-${image.id}`}
+                      data-testid={`reject-${index}`}
                     >
                       <X className="w-4 h-4" />
                       Reject
@@ -373,7 +393,7 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
                       onClick={() => handleRegenerate(image.id, index)}
                       disabled={regeneratingIndex === image.id}
                       className="w-full flex items-center justify-center gap-1 px-3 py-2 bg-[#f59e0b] text-white rounded-lg hover:bg-[#d97706] transition-all text-sm disabled:opacity-50"
-                      data-testid={`regenerate-${image.id}`}
+                      data-testid={`regenerate-${index}`}
                     >
                       {regeneratingIndex === image.id ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -409,7 +429,7 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
       {/* Cost Display */}
       {project.images.length > 0 && (
         <div className="text-center text-sm text-[#8b8b99]">
-          Images: {project.images.filter(img => !img.isUploaded && img.cost > 0).length} × $0.005 = 
+          Images: {project.images.filter(img => !img.isUploaded && img.cost > 0).length} x $0.005 = 
           <span className="text-[#e94560] ml-1">${totalCost.toFixed(3)}</span>
         </div>
       )}

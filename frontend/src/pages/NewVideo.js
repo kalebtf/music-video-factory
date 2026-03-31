@@ -89,7 +89,41 @@ export default function NewVideo() {
     try {
       setLoading(true);
       const { data } = await api.get(`/projects/${id}`);
-      // Map database project to local state
+
+      // Reconstruct images with full URLs
+      const loadedImages = (data.images || []).map(img => ({
+        ...img,
+        url: img.url || '',
+        status: img.status || 'pending',
+        cost: img.cost || 0,
+      }));
+
+      // Reconstruct clips with full URLs
+      const loadedClips = (data.clips || []).map(clip => ({
+        ...clip,
+        status: clip.status || 'pending',
+        cost: clip.cost || 0,
+        duration: clip.duration || 5.0,
+      }));
+
+      // Calculate costs from loaded data
+      const imageCost = loadedImages.reduce((sum, img) => sum + (img.cost || 0), 0);
+      const clipCost = loadedClips.reduce((sum, c) => sum + (c.cost || 0), 0);
+
+      // Restore concept with defaults
+      const savedConcept = data.concept || {};
+      const concept = {
+        theme: savedConcept.theme || '',
+        mood: savedConcept.mood || '',
+        palette: savedConcept.palette || ['#1a1a2e', '#e94560', '#0f3460', '#f0a500'],
+        prompts: savedConcept.prompts || ['', '', ''],
+        hooks: savedConcept.hooks || [],
+        selectedHooks: savedConcept.selectedHooks || [],
+        customInstructions: savedConcept.customInstructions || '',
+        numImages: savedConcept.numImages || 3,
+        animationStyle: savedConcept.animationStyle || '',
+      };
+
       setProject({
         ...initialProjectState,
         title: data.title || '',
@@ -98,21 +132,34 @@ export default function NewVideo() {
         templateId: data.templateId,
         climaxStart: data.climaxStart || 0,
         climaxEnd: data.climaxEnd || 30,
-        concept: data.concept || initialProjectState.concept,
-        images: data.images || [],
-        clips: data.clips || [],
+        concept,
+        images: loadedImages,
+        clips: loadedClips,
+        assembledVideo: data.finalVideoPath ? {
+          url: `/api/projects/${id}/final/video.mp4`,
+          duration: 0,
+          fileSize: 0,
+        } : null,
+        costs: {
+          images: imageCost,
+          clips: clipCost,
+          assembly: 0,
+        },
       });
       setProjectDbId(id);
-      // Determine which step to go to based on status
-      const stepMap = {
-        'draft': 1,
-        'processing': 2,
-        'images': 4,
-        'animation': 5,
-        'assembly': 6,
-        'done': 7,
-      };
-      setCurrentStep(stepMap[data.status] || 1);
+
+      // Determine which step to resume from based on actual data
+      let resumeStep = 1;
+      if (data.title) resumeStep = 2;
+      if (data.audioClimaxPath || data.climaxStart > 0) resumeStep = 3;
+      if (concept.prompts.some(p => p && p.trim())) resumeStep = 4;
+      if (loadedImages.length > 0) resumeStep = 4;
+      if (loadedImages.filter(img => img.status === 'approved').length >= 2) resumeStep = 5;
+      if (loadedClips.length > 0) resumeStep = 5;
+      if (loadedClips.filter(c => c.status === 'approved').length >= 2) resumeStep = 6;
+      if (data.finalVideoPath) resumeStep = 7;
+
+      setCurrentStep(resumeStep);
     } catch (err) {
       console.error('Failed to load project:', err);
     } finally {
@@ -177,8 +224,11 @@ export default function NewVideo() {
     }
   };
 
-  const updateProject = useCallback((updates) => {
-    setProject(prev => ({ ...prev, ...updates }));
+  const updateProject = useCallback((updatesOrFn) => {
+    setProject(prev => {
+      const updates = typeof updatesOrFn === 'function' ? updatesOrFn(prev) : updatesOrFn;
+      return { ...prev, ...updates };
+    });
   }, []);
 
   const totalCost = project.costs.images + project.costs.clips + project.costs.assembly;
@@ -222,6 +272,51 @@ export default function NewVideo() {
         );
       } catch (err) {
         console.error('Failed to extract climax:', err);
+      }
+    }
+
+    // Save concept when leaving Step 3
+    if (currentStep === 3 && projectDbId) {
+      try {
+        await api.put(`/projects/${projectDbId}/concept`, { concept: project.concept });
+      } catch (err) {
+        console.error('Failed to save concept:', err);
+      }
+    }
+
+    // Save images when leaving Step 4
+    if (currentStep === 4 && projectDbId) {
+      try {
+        const imagesToSave = project.images.map(img => ({
+          id: img.id,
+          url: img.url || '',
+          prompt: img.prompt || '',
+          status: img.status || 'pending',
+          cost: img.cost || 0,
+          isUploaded: img.isUploaded || false,
+          imagePath: img.imagePath || '',
+        }));
+        await api.put(`/projects/${projectDbId}/images`, { images: imagesToSave });
+      } catch (err) {
+        console.error('Failed to save images:', err);
+      }
+    }
+
+    // Save clips when leaving Step 5
+    if (currentStep === 5 && projectDbId) {
+      try {
+        const clipsToSave = project.clips.map(clip => ({
+          id: clip.id,
+          imageId: clip.imageId || '',
+          clipUrl: clip.clipUrl || '',
+          clipPath: clip.clipPath || '',
+          duration: clip.duration || 0,
+          status: clip.status || 'pending',
+          cost: clip.cost || 0,
+        }));
+        await api.put(`/projects/${projectDbId}/clips`, { clips: clipsToSave });
+      } catch (err) {
+        console.error('Failed to save clips:', err);
       }
     }
     

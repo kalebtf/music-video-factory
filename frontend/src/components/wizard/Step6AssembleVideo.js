@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { GripVertical, Play, RefreshCw, Loader2, Film, AlertCircle } from 'lucide-react';
 import api from '../../lib/api';
+import { AuthImage, AuthVideo } from '../AuthImage';
 
 export default function Step6AssembleVideo({ project, updateProject, projectId }) {
   const [assembling, setAssembling] = useState(false);
@@ -136,13 +137,13 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
                 <GripVertical className="w-5 h-5 text-[#8b8b99]" />
                 <div className="w-12 h-20 rounded overflow-hidden flex-shrink-0">
                   {clip.clipUrl ? (
-                    <video
+                    <AuthVideo
                       src={`${process.env.REACT_APP_BACKEND_URL}${clip.clipUrl}`}
                       className="w-full h-full object-cover"
                       muted
                     />
                   ) : image?.url ? (
-                    <img src={image.url} alt="" className="w-full h-full object-cover" />
+                    <AuthImage src={image.url} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full" style={{ backgroundColor: image?.color || '#2a2a35' }} />
                   )}
@@ -249,7 +250,7 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
         <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
           {/* Real Video Preview */}
           <div className="aspect-video bg-[#0c0c0f] rounded-lg overflow-hidden mb-4">
-            <video
+            <AuthVideo
               src={`${process.env.REACT_APP_BACKEND_URL}${project.assembledVideo.url}`}
               className="w-full h-full"
               controls

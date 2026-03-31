@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Check, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
 import api from '../../lib/api';
+import { AuthImage, AuthVideo } from '../AuthImage';
 
 export default function Step5AnimateClips({ project, updateProject, projectId }) {
   const [animatingIndex, setAnimatingIndex] = useState(null);
@@ -210,7 +211,7 @@ export default function Step5AnimateClips({ project, updateProject, projectId })
                 }`}
               >
                 {image.url ? (
-                  <img src={image.url} alt="" className="w-full h-full object-cover" />
+                  <AuthImage src={image.url} alt="" className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full" style={{ backgroundColor: image.color }} />
                 )}
@@ -245,14 +246,14 @@ export default function Step5AnimateClips({ project, updateProject, projectId })
             {/* Image/Video Preview */}
             <div className="aspect-[9/16] rounded-lg overflow-hidden border border-[#e94560] relative">
               {getClipForImage(approvedImages[currentIndex].id)?.clipUrl ? (
-                <video
+                <AuthVideo
                   src={`${process.env.REACT_APP_BACKEND_URL}${getClipForImage(approvedImages[currentIndex].id).clipUrl}`}
                   className="w-full h-full object-cover"
                   controls
                   playsInline
                 />
               ) : approvedImages[currentIndex].url ? (
-                <img
+                <AuthImage
                   src={approvedImages[currentIndex].url}
                   alt=""
                   className="w-full h-full object-cover"

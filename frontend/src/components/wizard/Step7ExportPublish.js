@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Download, Copy, Check, Film, ArrowRight, Smartphone, Loader2 } from 'lucide-react';
+import { AuthVideo } from '../AuthImage';
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL;
 const API = `${API_BASE}/api`;
@@ -128,7 +129,7 @@ export default function Step7ExportPublish({ project, projectId, onCreateAnother
         <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
           <h3 className="font-heading font-semibold text-[#f8f8f8] mb-4">Final Video Preview</h3>
           <div className="aspect-video bg-[#0c0c0f] rounded-lg overflow-hidden">
-            <video
+            <AuthVideo
               src={`${process.env.REACT_APP_BACKEND_URL}${project.assembledVideo.url}`}
               className="w-full h-full"
               controls
