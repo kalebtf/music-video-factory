@@ -286,12 +286,16 @@ async def register(request: RegisterRequest, response: Response):
     response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
     
+    logger.info(f"[AUTH] Register success: {email}")
+    
     return {
         "_id": user_id,
         "email": email,
         "apiKeys": {"openai": False, "falai": False, "kling": False},
         "settings": user_doc["settings"],
-        "createdAt": user_doc["createdAt"]
+        "createdAt": user_doc["createdAt"],
+        "access_token": access_token,
+        "refresh_token": refresh_token
     }
 
 @api_router.post("/auth/login")
@@ -326,6 +330,8 @@ async def login(request: LoginRequest, response: Response, req: Request):
     response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
     
+    logger.info(f"[AUTH] Login success: {email}")
+    
     return {
         "_id": user_id,
         "email": user["email"],
@@ -335,7 +341,9 @@ async def login(request: LoginRequest, response: Response, req: Request):
             "kling": bool(user.get("apiKeys", {}).get("kling"))
         },
         "settings": user.get("settings", {}),
-        "createdAt": user.get("createdAt", "")
+        "createdAt": user.get("createdAt", ""),
+        "access_token": access_token,
+        "refresh_token": refresh_token
     }
 
 async def increment_login_attempts(identifier: str):
@@ -362,11 +370,42 @@ async def logout(response: Response):
 @api_router.get("/auth/me")
 async def get_me(request: Request):
     user = await get_current_user(request)
+    logger.info(f"[AUTH] /auth/me called for user: {user.get('email')}")
     return user
+
+@api_router.get("/auth/test-keys")
+async def test_keys(request: Request):
+    """Test which API keys are saved and can be decrypted"""
+    user = await get_current_user(request)
+    full_user = await db.users.find_one({"_id": ObjectId(user["_id"])})
+    api_keys = full_user.get("apiKeys", {})
+    
+    openai_encrypted = api_keys.get("openai", "")
+    falai_encrypted = api_keys.get("falai", "")
+    
+    openai_ok = False
+    falai_ok = False
+    
+    if openai_encrypted:
+        decrypted = decrypt_api_key(openai_encrypted)
+        openai_ok = bool(decrypted and len(decrypted) > 5)
+    
+    if falai_encrypted:
+        decrypted = decrypt_api_key(falai_encrypted)
+        falai_ok = bool(decrypted and len(decrypted) > 5)
+    
+    logger.info(f"[AUTH] test-keys for {user.get('email')}: openai={openai_ok}, falai={falai_ok}")
+    
+    return {"openai": openai_ok, "falai": falai_ok}
 
 @api_router.post("/auth/refresh")
 async def refresh_token(request: Request, response: Response):
+    # Try cookie first, then Authorization header
     token = request.cookies.get("refresh_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
     if not token:
         raise HTTPException(status_code=401, detail="No refresh token")
     try:
@@ -380,7 +419,8 @@ async def refresh_token(request: Request, response: Response):
         user_id = str(user["_id"])
         access_token = create_access_token(user_id, user["email"])
         response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
-        return {"message": "Token refreshed"}
+        logger.info(f"[AUTH] Token refreshed for user: {user['email']}")
+        return {"message": "Token refreshed", "access_token": access_token}
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Refresh token expired")
     except jwt.InvalidTokenError:
@@ -390,6 +430,7 @@ async def refresh_token(request: Request, response: Response):
 @api_router.post("/settings/api-key")
 async def save_api_key(data: ApiKeyUpdate, request: Request):
     user = await get_current_user(request)
+    logger.info(f"[SETTINGS] save_api_key called by {user.get('email')} for provider: {data.provider}")
     provider = data.provider.lower()
     if provider not in ["openai", "falai", "kling"]:
         raise HTTPException(status_code=400, detail="Invalid provider")
@@ -404,6 +445,7 @@ async def save_api_key(data: ApiKeyUpdate, request: Request):
 @api_router.get("/settings/api-keys")
 async def get_api_keys(request: Request):
     user = await get_current_user(request)
+    logger.info(f"[SETTINGS] get_api_keys called by {user.get('email')}")
     full_user = await db.users.find_one({"_id": ObjectId(user["_id"])})
     api_keys = full_user.get("apiKeys", {})
     return {
@@ -647,6 +689,7 @@ async def upload_audio(project_id: str, request: Request, file: UploadFile = Fil
 async def detect_climax(project_id: str, request: Request):
     """Auto-detect the climax section using pydub loudness analysis"""
     user = await get_current_user(request)
+    logger.info(f"[AUDIO] detect-climax called by {user.get('email')} for project: {project_id}")
     
     project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
     if not project:
@@ -725,6 +768,7 @@ async def detect_climax(project_id: str, request: Request):
 async def extract_climax(project_id: str, data: ClimaxExtractionRequest, request: Request):
     """Extract the climax section using ffmpeg"""
     user = await get_current_user(request)
+    logger.info(f"[AUDIO] extract-climax called by {user.get('email')} for project: {project_id}")
     
     project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
     if not project:
@@ -827,9 +871,11 @@ async def get_user_openai_key(user_id: str) -> Optional[str]:
 async def analyze_song(data: AnalyzeSongRequest, request: Request):
     """Analyze song with OpenAI GPT-4o-mini to generate visual concept"""
     user = await get_current_user(request)
+    logger.info(f"[AI] analyze-song called by {user.get('email')} for project: {data.projectId}")
     
     # Get OpenAI key
     openai_key = await get_user_openai_key(user["_id"])
+    logger.info(f"[AI] OpenAI key found: {bool(openai_key)}")
     if not openai_key:
         raise HTTPException(status_code=400, detail="OpenAI API key not configured. Please add it in Settings.")
     
@@ -958,9 +1004,11 @@ class GenerateImageResponse(BaseModel):
 async def generate_image(data: GenerateImageRequest, request: Request):
     """Generate a single image using OpenAI GPT Image 1"""
     user = await get_current_user(request)
+    logger.info(f"[AI] generate-image called by {user.get('email')} for project: {data.projectId}, index: {data.imageIndex}")
     
     # Get OpenAI key
     openai_key = await get_user_openai_key(user["_id"])
+    logger.info(f"[AI] OpenAI key found: {bool(openai_key)}")
     if not openai_key:
         raise HTTPException(status_code=400, detail="OpenAI API key not configured. Please add it in Settings.")
     
@@ -1168,9 +1216,11 @@ class AnimateImageRequest(BaseModel):
 async def animate_image(data: AnimateImageRequest, request: Request):
     """Animate an image using FAL.AI Wan image-to-video"""
     user = await get_current_user(request)
+    logger.info(f"[AI] animate-image called by {user.get('email')} for project: {data.projectId}, index: {data.imageIndex}")
     
     # Get FAL.AI key
     fal_key = await get_user_falai_key(user["_id"])
+    logger.info(f"[AI] FAL.AI key found: {bool(fal_key)}")
     if not fal_key:
         raise HTTPException(status_code=400, detail="Please save your FAL.AI API key in Settings first.")
     
@@ -1348,6 +1398,7 @@ class AssembleVideoRequest(BaseModel):
 async def assemble_video(data: AssembleVideoRequest, request: Request):
     """Assemble final video from clips using FFmpeg"""
     user = await get_current_user(request)
+    logger.info(f"[VIDEO] assemble called by {user.get('email')} for project: {data.projectId}")
     
     project = await db.projects.find_one({"_id": ObjectId(data.projectId), "userId": user["_id"]})
     if not project:

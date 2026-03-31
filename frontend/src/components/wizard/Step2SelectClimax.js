@@ -1,8 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Waves, Wand2, Play, Pause, Loader2 } from 'lucide-react';
-import axios from 'axios';
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import api from '../../lib/api';
 
 export default function Step2SelectClimax({ project, updateProject, projectId, saveProject }) {
   const waveformRef = useRef(null);
@@ -126,10 +124,9 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     setDetectionMessage('');
     
     try {
-      const { data } = await axios.post(
-        `${API}/audio/detect-climax/${projectId}`,
-        {},
-        { withCredentials: true }
+      const { data } = await api.post(
+        `/audio/detect-climax/${projectId}`,
+        {}
       );
       
       updateProject({ 

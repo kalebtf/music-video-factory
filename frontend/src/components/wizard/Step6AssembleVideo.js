@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import { GripVertical, Play, RefreshCw, Loader2, Film, AlertCircle } from 'lucide-react';
-import axios from 'axios';
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import api from '../../lib/api';
 
 export default function Step6AssembleVideo({ project, updateProject, projectId }) {
   const [assembling, setAssembling] = useState(false);
@@ -33,16 +31,15 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
         return imgIndex >= 0 ? imgIndex : 0;
       });
 
-      const { data } = await axios.post(
-        `${API}/video/assemble`,
+      const { data } = await api.post(
+        '/video/assemble',
         {
           projectId,
           clipOrder,
           crossfadeDuration: project.assemblySettings.crossfade,
           addTextOverlay: project.assemblySettings.addTextOverlay,
           hookText: project.concept.selectedHooks?.[0] || ''
-        },
-        { withCredentials: true }
+        }
       );
 
       if (data.success) {

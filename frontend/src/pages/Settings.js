@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import axios from 'axios';
+import api from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Video, ArrowLeft, Check, X, Loader2, Key, Eye, EyeOff } from 'lucide-react';
+import { Video, ArrowLeft, Check, X, Loader2, Key, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import {
   Table,
   TableBody,
@@ -14,8 +14,6 @@ import {
 import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group';
 import { Label } from '../components/ui/label';
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
-
 export default function Settings() {
   const { refreshUser } = useAuth();
   const [apiKeys, setApiKeys] = useState({ openai: false, falai: false, kling: false });
@@ -26,6 +24,8 @@ export default function Settings() {
   const [costLogs, setCostLogs] = useState([]);
   const [totalCost, setTotalCost] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [testingKeys, setTestingKeys] = useState(false);
+  const [keyTestResult, setKeyTestResult] = useState(null);
 
   useEffect(() => {
     fetchData();
@@ -34,9 +34,9 @@ export default function Settings() {
   const fetchData = async () => {
     try {
       const [keysRes, settingsRes, logsRes] = await Promise.all([
-        axios.get(`${API}/settings/api-keys`, { withCredentials: true }),
-        axios.get(`${API}/settings`, { withCredentials: true }),
-        axios.get(`${API}/cost-logs`, { withCredentials: true })
+        api.get('/settings/api-keys'),
+        api.get('/settings'),
+        api.get('/cost-logs')
       ]);
       setApiKeys(keysRes.data);
       setSettings(settingsRes.data);
@@ -55,7 +55,7 @@ export default function Settings() {
 
     setSavingKey(provider);
     try {
-      const response = await axios.post(`${API}/settings/api-key`, { provider, apiKey }, { withCredentials: true });
+      const response = await api.post('/settings/api-key', { provider, apiKey });
       if (response.data.success) {
         setApiKeys({ ...apiKeys, [provider]: true });
         setApiKeyInputs({ ...apiKeyInputs, [provider]: '' });
@@ -74,9 +74,23 @@ export default function Settings() {
     const newSettings = { ...settings, [type]: value };
     setSettings(newSettings);
     try {
-      await axios.post(`${API}/settings/providers`, newSettings, { withCredentials: true });
+      await api.post('/settings/providers', newSettings);
     } catch (err) {
       console.error('Failed to update provider:', err);
+    }
+  };
+
+  const handleTestKeys = async () => {
+    setTestingKeys(true);
+    setKeyTestResult(null);
+    try {
+      const { data } = await api.get('/auth/test-keys');
+      setKeyTestResult(data);
+    } catch (err) {
+      console.error('Failed to test keys:', err);
+      setKeyTestResult({ error: 'Failed to test keys. Please try again.' });
+    } finally {
+      setTestingKeys(false);
     }
   };
 
@@ -173,6 +187,55 @@ export default function Settings() {
                 </div>
               </div>
             ))}
+          </div>
+
+          {/* Test Keys Button */}
+          <div className="mt-6 pt-4 border-t border-[#2a2a35]">
+            <button
+              onClick={handleTestKeys}
+              disabled={testingKeys}
+              className="flex items-center gap-2 px-4 py-2.5 bg-[#0c0c0f] border border-[#2a2a35] text-[#f8f8f8] rounded-lg hover:bg-[#1e1e24] transition-all disabled:opacity-50"
+              data-testid="test-keys-button"
+            >
+              {testingKeys ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="w-4 h-4 text-[#e94560]" strokeWidth={1.5} />
+                  Test Keys
+                </>
+              )}
+            </button>
+            {keyTestResult && !keyTestResult.error && (
+              <div className="mt-3 space-y-2" data-testid="test-keys-result">
+                <div className="flex items-center gap-2 text-sm">
+                  {keyTestResult.openai ? (
+                    <Check className="w-4 h-4 text-[#10b981]" />
+                  ) : (
+                    <X className="w-4 h-4 text-[#ef4444]" />
+                  )}
+                  <span className={keyTestResult.openai ? 'text-[#10b981]' : 'text-[#ef4444]'}>
+                    OpenAI: {keyTestResult.openai ? 'Working' : 'Not configured'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  {keyTestResult.falai ? (
+                    <Check className="w-4 h-4 text-[#10b981]" />
+                  ) : (
+                    <X className="w-4 h-4 text-[#ef4444]" />
+                  )}
+                  <span className={keyTestResult.falai ? 'text-[#10b981]' : 'text-[#ef4444]'}>
+                    FAL.AI: {keyTestResult.falai ? 'Working' : 'Not configured'}
+                  </span>
+                </div>
+              </div>
+            )}
+            {keyTestResult?.error && (
+              <p className="mt-3 text-sm text-[#ef4444]" data-testid="test-keys-error">{keyTestResult.error}</p>
+            )}
           </div>
         </section>
 

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Download, Copy, Check, Film, ArrowRight, Smartphone, Loader2 } from 'lucide-react';
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const API_BASE = process.env.REACT_APP_BACKEND_URL;
+const API = `${API_BASE}/api`;
 
 const PLATFORMS = [
   { id: 'tiktok', name: 'TikTok', icon: '🎵', resolution: '1080x1920', ratio: '9:16', format: 'MP4' },
@@ -44,9 +45,11 @@ export default function Step7ExportPublish({ project, projectId, onCreateAnother
       link.href = downloadUrl;
       link.setAttribute('download', '');
 
-      // We need to include credentials, so use fetch instead
+      // We need to include auth token in the request
+      const token = localStorage.getItem('access_token');
       const response = await fetch(downloadUrl, {
-        credentials: 'include'
+        credentials: 'include',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
 
       if (!response.ok) {
@@ -80,8 +83,10 @@ export default function Step7ExportPublish({ project, projectId, onCreateAnother
     try {
       const downloadUrl = `${API}/projects/${projectId}/download-zip`;
 
+      const token = localStorage.getItem('access_token');
       const response = await fetch(downloadUrl, {
-        credentials: 'include'
+        credentials: 'include',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
 
       if (!response.ok) {

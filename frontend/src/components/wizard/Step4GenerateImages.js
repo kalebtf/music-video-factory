@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Image as ImageIcon, Check, X, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
-import axios from 'axios';
+import api from '../../lib/api';
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const PLACEHOLDER_COLORS = ['#e94560', '#0f3460', '#f0a500', '#16213e', '#53d769', '#8b5cf6', '#00b4d8', '#ff6b35'];
 
 export default function Step4GenerateImages({ project, updateProject, projectId }) {
@@ -72,14 +71,13 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
       setGeneratingIndex(i);
       
       try {
-        const { data } = await axios.post(
-          `${API}/ai/generate-image`,
+        const { data } = await api.post(
+          '/ai/generate-image',
           {
             projectId,
             prompt: prompts[i] + (project.concept.customInstructions ? `, ${project.concept.customInstructions}` : ''),
             imageIndex: i
-          },
-          { withCredentials: true }
+          }
         );
 
         // Update the specific image with the result
@@ -145,14 +143,13 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
       : image.prompt;
 
     try {
-      const { data } = await axios.post(
-        `${API}/ai/generate-image`,
+      const { data } = await api.post(
+        '/ai/generate-image',
         {
           projectId,
           prompt: newPrompt + (project.concept.customInstructions ? `, ${project.concept.customInstructions}` : ''),
           imageIndex: index
-        },
-        { withCredentials: true }
+        }
       );
 
       updateProject(prev => {

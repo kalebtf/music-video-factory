@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import api from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Video, Settings, Plus, Film, Calendar, DollarSign, Loader2 } from 'lucide-react';
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export default function Dashboard() {
   const { user, logout } = useAuth();
@@ -20,8 +18,8 @@ export default function Dashboard() {
   const fetchData = async () => {
     try {
       const [statsRes, projectsRes] = await Promise.all([
-        axios.get(`${API}/stats`, { withCredentials: true }),
-        axios.get(`${API}/projects`, { withCredentials: true })
+        api.get('/stats'),
+        api.get('/projects')
       ]);
       setStats(statsRes.data);
       setProjects(projectsRes.data);

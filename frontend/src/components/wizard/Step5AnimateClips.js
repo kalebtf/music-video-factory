@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Check, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
-import axios from 'axios';
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import api from '../../lib/api';
 
 export default function Step5AnimateClips({ project, updateProject, projectId }) {
   const [animatingIndex, setAnimatingIndex] = useState(null);
@@ -45,15 +43,14 @@ export default function Step5AnimateClips({ project, updateProject, projectId })
 
     try {
       // Submit animation job
-      const { data } = await axios.post(
-        `${API}/ai/animate-image`,
+      const { data } = await api.post(
+        '/ai/animate-image',
         {
           projectId,
           imageIndex: index,
           imagePath: image.imagePath || `${projectId}/images/img_${index}.png`,
           prompt: `${project.concept.mood || project.concept.animationStyle || 'cinematic slow zoom'}, ${project.concept.theme || 'emotional'}`
-        },
-        { withCredentials: true }
+        }
       );
 
       if (!data.success) {
@@ -66,9 +63,8 @@ export default function Step5AnimateClips({ project, updateProject, projectId })
       const requestId = data.requestId;
       pollingRef.current = setInterval(async () => {
         try {
-          const statusRes = await axios.get(
-            `${API}/ai/animation-status/${requestId}?project_id=${projectId}&image_index=${index}`,
-            { withCredentials: true }
+          const statusRes = await api.get(
+            `/ai/animation-status/${requestId}?project_id=${projectId}&image_index=${index}`
           );
 
           const status = statusRes.data.status;

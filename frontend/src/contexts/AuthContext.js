@@ -1,12 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../lib/api';
 
 const AuthContext = createContext(null);
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
-
-// Configure axios defaults
-axios.defaults.withCredentials = true;
 
 export function formatApiErrorDetail(detail) {
   if (detail == null) return "Something went wrong. Please try again.";
@@ -18,7 +13,6 @@ export function formatApiErrorDetail(detail) {
 }
 
 export function AuthProvider({ children }) {
-  // null = checking, false = not authenticated, object = authenticated
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -27,10 +21,18 @@ export function AuthProvider({ children }) {
   }, []);
 
   const checkAuth = async () => {
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      setUser(false);
+      setLoading(false);
+      return;
+    }
     try {
-      const { data } = await axios.get(`${API}/auth/me`, { withCredentials: true });
+      const { data } = await api.get('/auth/me');
       setUser(data);
     } catch (e) {
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
       setUser(false);
     } finally {
       setLoading(false);
@@ -38,29 +40,43 @@ export function AuthProvider({ children }) {
   };
 
   const login = async (email, password) => {
-    const { data } = await axios.post(`${API}/auth/login`, { email, password }, { withCredentials: true });
+    const { data } = await api.post('/auth/login', { email, password });
+    if (data.access_token) {
+      localStorage.setItem('access_token', data.access_token);
+    }
+    if (data.refresh_token) {
+      localStorage.setItem('refresh_token', data.refresh_token);
+    }
     setUser(data);
     return data;
   };
 
   const register = async (email, password) => {
-    const { data } = await axios.post(`${API}/auth/register`, { email, password }, { withCredentials: true });
+    const { data } = await api.post('/auth/register', { email, password });
+    if (data.access_token) {
+      localStorage.setItem('access_token', data.access_token);
+    }
+    if (data.refresh_token) {
+      localStorage.setItem('refresh_token', data.refresh_token);
+    }
     setUser(data);
     return data;
   };
 
   const logout = async () => {
     try {
-      await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
+      await api.post('/auth/logout', {});
     } catch (e) {
       // Ignore errors
     }
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
     setUser(false);
   };
 
   const refreshUser = async () => {
     try {
-      const { data } = await axios.get(`${API}/auth/me`, { withCredentials: true });
+      const { data } = await api.get('/auth/me');
       setUser(data);
     } catch (e) {
       // Ignore

@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Palette, Wand2, Plus, Trash2, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
-import axios from 'axios';
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import api from '../../lib/api';
 
 export default function Step3VisualConcept({ project, updateProject, projectId }) {
   const [analyzing, setAnalyzing] = useState(false);
@@ -56,10 +54,9 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
     setError('');
     
     try {
-      const { data } = await axios.post(
-        `${API}/ai/analyze-song`,
-        { projectId },
-        { withCredentials: true }
+      const { data } = await api.post(
+        '/ai/analyze-song',
+        { projectId }
       );
       
       updateProject({

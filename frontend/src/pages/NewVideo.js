@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import axios from 'axios';
+import api from '../lib/api';
 import { Video, ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, DollarSign } from 'lucide-react';
 
 // Step components
@@ -11,8 +11,6 @@ import Step4GenerateImages from '../components/wizard/Step4GenerateImages';
 import Step5AnimateClips from '../components/wizard/Step5AnimateClips';
 import Step6AssembleVideo from '../components/wizard/Step6AssembleVideo';
 import Step7ExportPublish from '../components/wizard/Step7ExportPublish';
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const STEPS = [
   { id: 1, name: 'Song Input', shortName: 'Song' },
@@ -80,7 +78,7 @@ export default function NewVideo() {
 
   const fetchTemplates = async () => {
     try {
-      const { data } = await axios.get(`${API}/templates`, { withCredentials: true });
+      const { data } = await api.get('/templates');
       setTemplates(data);
     } catch (err) {
       console.error('Failed to fetch templates:', err);
@@ -90,7 +88,7 @@ export default function NewVideo() {
   const loadProject = async (id) => {
     try {
       setLoading(true);
-      const { data } = await axios.get(`${API}/projects/${id}`, { withCredentials: true });
+      const { data } = await api.get(`/projects/${id}`);
       // Map database project to local state
       setProject({
         ...initialProjectState,
@@ -126,12 +124,12 @@ export default function NewVideo() {
     if (projectDbId) return projectDbId;
     try {
       setSaving(true);
-      const { data } = await axios.post(`${API}/projects`, {
+      const { data } = await api.post('/projects', {
         title: project.title || 'Untitled Project',
         genre: project.genre,
         lyrics: project.lyrics,
         templateId: project.templateId,
-      }, { withCredentials: true });
+      });
       setProjectDbId(data._id);
       
       // Upload audio file if exists
@@ -153,11 +151,10 @@ export default function NewVideo() {
       const formData = new FormData();
       formData.append('file', audioFile);
       
-      const { data } = await axios.post(
-        `${API}/audio/upload/${projId}`,
+      const { data } = await api.post(
+        `/audio/upload/${projId}`,
         formData,
         { 
-          withCredentials: true,
           headers: { 'Content-Type': 'multipart/form-data' }
         }
       );
@@ -172,7 +169,7 @@ export default function NewVideo() {
     if (!projectDbId) return;
     try {
       setSaving(true);
-      await axios.put(`${API}/projects/${projectDbId}`, updates, { withCredentials: true });
+      await api.put(`/projects/${projectDbId}`, updates);
     } catch (err) {
       console.error('Failed to save project:', err);
     } finally {
@@ -215,14 +212,13 @@ export default function NewVideo() {
     // Extract climax audio when leaving Step 2
     if (currentStep === 2 && projectDbId && project.audioFile) {
       try {
-        await axios.post(
-          `${API}/audio/extract-climax/${projectDbId}`,
+        await api.post(
+          `/audio/extract-climax/${projectDbId}`,
           {
             projectId: projectDbId,
             start: project.climaxStart,
             end: project.climaxEnd
-          },
-          { withCredentials: true }
+          }
         );
       } catch (err) {
         console.error('Failed to extract climax:', err);
