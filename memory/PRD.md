@@ -12,7 +12,7 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 ## What's Been Implemented
 
 ### Phase 1 - Foundation
-- [x] JWT Authentication
+- [x] JWT Authentication (localStorage + Bearer token)
 - [x] Dashboard with stats
 - [x] Settings with encrypted API key storage (AES)
 - [x] 6 default templates
@@ -34,32 +34,64 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 
 **New Features:**
 - [x] FAL.AI video animation (Wan model)
-  - Async queue-based API with polling
-  - Real video preview in HTML5 player
-  - Approve/re-animate workflow
 - [x] Real video assembly with FFmpeg
-  - Clip concatenation
-  - Crossfade transitions
-  - Text overlay with drawtext filter
-  - Audio sync with climax track
-  - Final video preview
-- [x] Real file downloads
-  - Platform-specific downloads (TikTok, YouTube, Instagram)
-  - ZIP download with all project files
-  - Proper Content-Disposition headers
+- [x] Real file downloads (platform-specific + ZIP)
 
-## API Endpoints (Phase 4)
-- POST /api/ai/animate-image - Submit FAL.AI animation job
-- GET /api/ai/animation-status/{request_id} - Poll animation status
-- GET /api/projects/{id}/clips/{filename} - Serve video clips
-- POST /api/video/assemble - Assemble final video with FFmpeg
-- GET /api/projects/{id}/final/{filename} - Serve final video
-- GET /api/projects/{id}/download/{platform} - Download for platform
-- GET /api/projects/{id}/download-zip - Download all files as ZIP
+### Phase 5 - Auth Architecture Fix (Feb 2026)
+- [x] Moved from cookie-based auth to localStorage + Authorization Bearer header
+- [x] Created centralized axios instance (`/app/frontend/src/lib/api.js`) with request/response interceptors
+- [x] All frontend files use centralized api instance (no raw axios)
+- [x] Backend returns access_token and refresh_token in login/register response body
+- [x] Token refresh supports Authorization header (not just cookies)
+- [x] Added GET /api/auth/test-keys endpoint for key validation
+- [x] Added "Test Keys" button in Settings page
+- [x] Added debug logging on all authenticated endpoints
+- [x] 401 response interceptor redirects to login page
 
-## Dependencies Added (Phase 4)
-- pydub (audio analysis fallback)
-- fal-client (FAL.AI SDK)
+## API Endpoints
+### Auth
+- POST /api/auth/register - Register (returns tokens)
+- POST /api/auth/login - Login (returns tokens)
+- POST /api/auth/logout - Logout
+- GET /api/auth/me - Get current user
+- POST /api/auth/refresh - Refresh token (supports Bearer header)
+- GET /api/auth/test-keys - Test which API keys are configured
+
+### Settings
+- GET /api/settings - Get user settings
+- POST /api/settings/api-key - Save API key
+- GET /api/settings/api-keys - Get key status
+- POST /api/settings/providers - Update providers
+
+### Projects
+- GET /api/projects - List projects
+- POST /api/projects - Create project
+- GET /api/projects/{id} - Get project
+- PUT /api/projects/{id} - Update project
+- DELETE /api/projects/{id} - Delete project
+
+### Audio
+- POST /api/audio/upload/{id} - Upload audio
+- POST /api/audio/detect-climax/{id} - Auto-detect climax
+- POST /api/audio/extract-climax/{id} - Extract climax segment
+
+### AI
+- POST /api/ai/analyze-song - GPT-4o-mini analysis
+- POST /api/ai/generate-image - GPT Image 1 generation
+- POST /api/ai/animate-image - FAL.AI Wan animation
+- GET /api/ai/animation-status/{id} - Poll animation
+
+### Video
+- POST /api/video/assemble - FFmpeg assembly
+- GET /api/projects/{id}/final/{file} - Serve final video
+- GET /api/projects/{id}/download/{platform} - Platform download
+- GET /api/projects/{id}/download-zip - ZIP download
+
+## Architecture
+- Frontend: `/app/frontend/src/lib/api.js` - centralized axios with Bearer token interceptors
+- Frontend: `/app/frontend/src/contexts/AuthContext.js` - stores tokens in localStorage
+- Backend: `/app/backend/server.py` - monolithic FastAPI with all routes (~1660 lines)
+- Auth: JWT access tokens (15min) + refresh tokens (7 days) via localStorage
 
 ## Cost Structure
 - GPT-4o-mini analysis: $0.01 per song
@@ -71,6 +103,7 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - Password: test123456
 
 ## Next Tasks
-- Add Kling Direct integration option
-- Add batch processing for multiple videos
-- Add social media direct posting
+- [ ] User end-to-end verification of full flow
+- [ ] Kling Direct integration option (P1, deferred)
+- [ ] Batch processing for multiple videos (P2, deferred)
+- [ ] Refactor server.py into modular routers (P3, deferred)
