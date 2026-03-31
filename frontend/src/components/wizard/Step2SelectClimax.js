@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Waves, Wand2, Play, Pause, Square, Loader2 } from 'lucide-react';
+import { Waves, Wand2, Play, Pause, Loader2 } from 'lucide-react';
 import axios from 'axios';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -113,22 +113,9 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
 
   const regionDuration = project.climaxEnd - project.climaxStart;
 
-  const handlePlay = () => {
+  const handlePlayPause = () => {
     if (wavesurferRef.current) {
-      wavesurferRef.current.play();
-    }
-  };
-
-  const handlePause = () => {
-    if (wavesurferRef.current) {
-      wavesurferRef.current.pause();
-    }
-  };
-
-  const handleStop = () => {
-    if (wavesurferRef.current) {
-      wavesurferRef.current.stop();
-      setCurrentTime(0);
+      wavesurferRef.current.playPause();
     }
   };
 
@@ -216,31 +203,25 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
           data-testid="waveform"
         />
 
-        {/* Audio Player Controls */}
-        <div className="flex items-center justify-center gap-4 mt-4">
+        {/* Audio Player Controls - Single Toggle Button */}
+        <div className="flex items-center justify-center mt-4">
           <button
-            onClick={handlePlay}
-            disabled={!isReady || isPlaying}
-            className="p-3 bg-[#e94560] text-white rounded-full hover:bg-[#f25a74] transition-all disabled:opacity-50"
-            data-testid="play-button"
-          >
-            <Play className="w-5 h-5" fill="white" />
-          </button>
-          <button
-            onClick={handlePause}
-            disabled={!isReady || !isPlaying}
-            className="p-3 bg-[#0c0c0f] border border-[#2a2a35] text-[#f8f8f8] rounded-full hover:bg-[#1e1e24] transition-all disabled:opacity-50"
-            data-testid="pause-button"
-          >
-            <Pause className="w-5 h-5" />
-          </button>
-          <button
-            onClick={handleStop}
+            onClick={handlePlayPause}
             disabled={!isReady}
-            className="p-3 bg-[#0c0c0f] border border-[#2a2a35] text-[#f8f8f8] rounded-full hover:bg-[#1e1e24] transition-all disabled:opacity-50"
-            data-testid="stop-button"
+            className="flex items-center gap-2 px-6 py-3 bg-[#e94560] text-white rounded-full hover:bg-[#f25a74] transition-all disabled:opacity-50"
+            data-testid="play-pause-button"
           >
-            <Square className="w-5 h-5" />
+            {isPlaying ? (
+              <>
+                <Pause className="w-5 h-5" />
+                Pause
+              </>
+            ) : (
+              <>
+                <Play className="w-5 h-5" fill="white" />
+                Play
+              </>
+            )}
           </button>
         </div>
 

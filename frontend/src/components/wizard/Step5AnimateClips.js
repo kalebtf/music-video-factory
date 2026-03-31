@@ -1,59 +1,153 @@
-import React, { useState } from 'react';
-import { Play, Check, RefreshCw, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, Check, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
+import axios from 'axios';
 
-export default function Step5AnimateClips({ project, updateProject }) {
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+
+export default function Step5AnimateClips({ project, updateProject, projectId }) {
   const [animatingIndex, setAnimatingIndex] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [animationStatus, setAnimationStatus] = useState({});
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [error, setError] = useState('');
+  const pollingRef = useRef(null);
+  const timerRef = useRef(null);
 
   const approvedImages = project.images.filter(img => img.status === 'approved');
-  const costPerSecond = 0.05; // FAL.AI Wan default
+  const costPerClip = 0.25; // FAL.AI Wan estimated cost
+
+  // Clear polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
 
   const handleAnimate = async (imageId, index) => {
-    setAnimatingIndex(index);
-    // Placeholder: simulate video generation
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    const duration = 5.0; // Default clip duration
-    const newClip = {
-      id: `clip-${imageId}`,
-      imageId,
-      duration,
-      status: 'pending',
-      cost: duration * costPerSecond,
-    };
-
-    // Check if clip already exists
-    const existingIndex = project.clips.findIndex(c => c.imageId === imageId);
-    let newClips;
-    if (existingIndex >= 0) {
-      newClips = [...project.clips];
-      newClips[existingIndex] = newClip;
-    } else {
-      newClips = [...project.clips, newClip];
+    if (!projectId) {
+      setError('Project not created yet');
+      return;
     }
 
-    const totalClipCost = newClips.reduce((sum, c) => sum + (c.cost || 0), 0);
+    const image = approvedImages.find(img => img.id === imageId);
+    if (!image) return;
 
-    updateProject({
-      clips: newClips,
-      costs: {
-        ...project.costs,
-        clips: totalClipCost,
+    setAnimatingIndex(index);
+    setError('');
+    setElapsedTime(0);
+    setAnimationStatus({ ...animationStatus, [imageId]: 'SUBMITTING' });
+
+    // Start elapsed time counter
+    timerRef.current = setInterval(() => {
+      setElapsedTime(prev => prev + 1);
+    }, 1000);
+
+    try {
+      // Submit animation job
+      const { data } = await axios.post(
+        `${API}/ai/animate-image`,
+        {
+          projectId,
+          imageIndex: index,
+          imagePath: image.imagePath || `${projectId}/images/img_${index}.png`,
+          prompt: `${project.concept.mood || project.concept.animationStyle || 'cinematic slow zoom'}, ${project.concept.theme || 'emotional'}`
+        },
+        { withCredentials: true }
+      );
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to submit animation');
       }
-    });
-    setAnimatingIndex(null);
+
+      setAnimationStatus({ ...animationStatus, [imageId]: 'IN_QUEUE' });
+
+      // Start polling for status
+      const requestId = data.requestId;
+      pollingRef.current = setInterval(async () => {
+        try {
+          const statusRes = await axios.get(
+            `${API}/ai/animation-status/${requestId}?project_id=${projectId}&image_index=${index}`,
+            { withCredentials: true }
+          );
+
+          const status = statusRes.data.status;
+          setAnimationStatus(prev => ({ ...prev, [imageId]: status }));
+
+          if (status === 'COMPLETED') {
+            clearInterval(pollingRef.current);
+            clearInterval(timerRef.current);
+            pollingRef.current = null;
+            timerRef.current = null;
+
+            // Update clips array
+            const newClip = {
+              id: `clip-${imageId}`,
+              imageId,
+              clipUrl: statusRes.data.clipUrl,
+              clipPath: statusRes.data.clipPath,
+              duration: 5.0,
+              status: 'pending',
+              cost: statusRes.data.cost || costPerClip,
+            };
+
+            const existingIndex = project.clips.findIndex(c => c.imageId === imageId);
+            let newClips;
+            if (existingIndex >= 0) {
+              newClips = [...project.clips];
+              newClips[existingIndex] = newClip;
+            } else {
+              newClips = [...project.clips, newClip];
+            }
+
+            const totalClipCost = newClips.reduce((sum, c) => sum + (c.cost || 0), 0);
+
+            updateProject({
+              clips: newClips,
+              costs: { ...project.costs, clips: totalClipCost }
+            });
+
+            setAnimatingIndex(null);
+            setElapsedTime(0);
+
+          } else if (status === 'ERROR') {
+            clearInterval(pollingRef.current);
+            clearInterval(timerRef.current);
+            pollingRef.current = null;
+            timerRef.current = null;
+            setError(statusRes.data.error || 'Animation failed');
+            setAnimatingIndex(null);
+          }
+        } catch (pollErr) {
+          console.error('Polling error:', pollErr);
+        }
+      }, 5000); // Poll every 5 seconds
+
+    } catch (err) {
+      console.error('Animation submission failed:', err);
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+      setError(err.response?.data?.detail || 'Failed to start animation. Check your FAL.AI API key in Settings.');
+      setAnimatingIndex(null);
+      setAnimationStatus({ ...animationStatus, [imageId]: 'ERROR' });
+    }
   };
 
   const handleApproveClip = (clipId) => {
-    const clipIndex = project.clips.findIndex(c => c.id === clipId);
     updateProject({
       clips: project.clips.map(clip =>
         clip.id === clipId ? { ...clip, status: 'approved' } : clip
       )
     });
-    
-    // Auto-advance to next
-    if (currentIndex < approvedImages.length - 1) {
+
+    // Auto-advance to next unapproved
+    const nextUnapproved = approvedImages.findIndex((img, i) => {
+      const clip = project.clips.find(c => c.imageId === img.id);
+      return !clip || clip.status !== 'approved';
+    });
+    if (nextUnapproved >= 0 && nextUnapproved !== currentIndex) {
+      setCurrentIndex(nextUnapproved);
+    } else if (currentIndex < approvedImages.length - 1) {
       setCurrentIndex(currentIndex + 1);
     }
   };
@@ -63,6 +157,7 @@ export default function Step5AnimateClips({ project, updateProject }) {
     updateProject({
       clips: project.clips.filter(c => c.imageId !== imageId)
     });
+    setAnimationStatus({ ...animationStatus, [imageId]: null });
     handleAnimate(imageId, index);
   };
 
@@ -81,9 +176,17 @@ export default function Step5AnimateClips({ project, updateProject }) {
           Animate Clips
         </h2>
         <p className="text-[#8b8b99]">
-          Generate video clips from your approved images
+          Generate video clips from your approved images using FAL.AI
         </p>
       </div>
+
+      {/* Error Message */}
+      {error && (
+        <div className="bg-[#ef4444]/10 border border-[#ef4444]/30 text-[#ef4444] px-4 py-3 rounded-lg flex items-center gap-2">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* Clips List */}
       <div className="flex gap-4 overflow-x-auto pb-4">
@@ -91,17 +194,18 @@ export default function Step5AnimateClips({ project, updateProject }) {
           const clip = getClipForImage(image.id);
           const isCurrent = index === currentIndex;
           const isAnimating = animatingIndex === index;
+          const status = animationStatus[image.id];
 
           return (
             <div
               key={image.id}
-              onClick={() => setCurrentIndex(index)}
+              onClick={() => !isAnimating && setCurrentIndex(index)}
               className={`flex-shrink-0 w-32 cursor-pointer transition-all ${
                 isCurrent ? 'opacity-100 scale-105' : 'opacity-50 hover:opacity-75'
               }`}
             >
               <div
-                className={`aspect-[9/16] rounded-lg overflow-hidden border-2 transition-all ${
+                className={`aspect-[9/16] rounded-lg overflow-hidden border-2 transition-all relative ${
                   clip?.status === 'approved'
                     ? 'border-[#10b981]'
                     : isCurrent
@@ -112,10 +216,12 @@ export default function Step5AnimateClips({ project, updateProject }) {
                 {image.url ? (
                   <img src={image.url} alt="" className="w-full h-full object-cover" />
                 ) : (
-                  <div
-                    className="w-full h-full"
-                    style={{ backgroundColor: image.color }}
-                  />
+                  <div className="w-full h-full" style={{ backgroundColor: image.color }} />
+                )}
+                {isAnimating && (
+                  <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
+                    <Loader2 className="w-6 h-6 text-[#e94560] animate-spin" />
+                  </div>
                 )}
               </div>
               <div className="text-center mt-2">
@@ -124,6 +230,8 @@ export default function Step5AnimateClips({ project, updateProject }) {
                     <span className="text-[#10b981]">{clip.duration}s ✓</span>
                   ) : clip ? (
                     <span className="text-[#f59e0b]">{clip.duration}s</span>
+                  ) : status === 'IN_QUEUE' || status === 'IN_PROGRESS' ? (
+                    <span className="text-[#f59e0b]">Generating...</span>
                   ) : (
                     'Not animated'
                   )}
@@ -138,9 +246,16 @@ export default function Step5AnimateClips({ project, updateProject }) {
       {approvedImages[currentIndex] && (
         <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Image */}
-            <div className="aspect-[9/16] rounded-lg overflow-hidden border border-[#e94560]">
-              {approvedImages[currentIndex].url ? (
+            {/* Image/Video Preview */}
+            <div className="aspect-[9/16] rounded-lg overflow-hidden border border-[#e94560] relative">
+              {getClipForImage(approvedImages[currentIndex].id)?.clipUrl ? (
+                <video
+                  src={`${process.env.REACT_APP_BACKEND_URL}${getClipForImage(approvedImages[currentIndex].id).clipUrl}`}
+                  className="w-full h-full object-cover"
+                  controls
+                  playsInline
+                />
+              ) : approvedImages[currentIndex].url ? (
                 <img
                   src={approvedImages[currentIndex].url}
                   alt=""
@@ -152,6 +267,18 @@ export default function Step5AnimateClips({ project, updateProject }) {
                   style={{ backgroundColor: approvedImages[currentIndex].color }}
                 >
                   <span className="text-white/50 text-lg">Image {currentIndex + 1}</span>
+                </div>
+              )}
+
+              {/* Animation Progress Overlay */}
+              {animatingIndex === currentIndex && (
+                <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center">
+                  <Loader2 className="w-12 h-12 text-[#e94560] animate-spin mb-4" />
+                  <p className="text-white font-medium">Generating animation...</p>
+                  <p className="text-[#8b8b99] text-sm mt-1">{elapsedTime}s elapsed</p>
+                  <p className="text-[#8b8b99] text-xs mt-2">
+                    Status: {animationStatus[approvedImages[currentIndex].id] || 'Submitting...'}
+                  </p>
                 </div>
               )}
             </div>
@@ -172,7 +299,7 @@ export default function Step5AnimateClips({ project, updateProject }) {
                   {animatingIndex === currentIndex ? (
                     <>
                       <Loader2 className="w-5 h-5 animate-spin" />
-                      Generating clip... ~60s
+                      Generating... {elapsedTime}s
                     </>
                   ) : (
                     <>
@@ -183,14 +310,14 @@ export default function Step5AnimateClips({ project, updateProject }) {
                 </button>
               ) : (
                 <>
-                  {/* Clip Preview Placeholder */}
-                  <div className="aspect-video bg-[#0c0c0f] rounded-lg flex items-center justify-center border border-[#2a2a35]">
-                    <div className="text-center">
-                      <Play className="w-12 h-12 text-[#e94560] mx-auto mb-2" />
-                      <span className="text-[#8b8b99]">
-                        {getClipForImage(approvedImages[currentIndex].id).duration}s clip
-                      </span>
-                    </div>
+                  {/* Clip Info */}
+                  <div className="bg-[#0c0c0f] p-4 rounded-lg">
+                    <p className="text-[#f8f8f8]">
+                      Video clip generated: {getClipForImage(approvedImages[currentIndex].id).duration}s
+                    </p>
+                    <p className="text-sm text-[#8b8b99] mt-1">
+                      Watch the preview above, then approve or re-animate
+                    </p>
                   </div>
 
                   {/* Approve/Re-animate */}
@@ -229,12 +356,12 @@ export default function Step5AnimateClips({ project, updateProject }) {
 
       {/* Bottom Stats */}
       <div className="flex flex-wrap items-center justify-center gap-4 text-sm">
-        {project.clips.map((clip, index) => {
+        {project.clips.map((clip) => {
           const img = approvedImages.find(i => i.id === clip.imageId);
           const imgIndex = approvedImages.indexOf(img);
           return (
             <span key={clip.id} className="text-[#8b8b99]">
-              Clip {imgIndex + 1}: {clip.duration}s 
+              Clip {imgIndex + 1}: {clip.duration}s
               {clip.status === 'approved' ? (
                 <span className="text-[#10b981] ml-1">✓</span>
               ) : (
@@ -253,7 +380,7 @@ export default function Step5AnimateClips({ project, updateProject }) {
       {/* Cost Display */}
       {project.clips.length > 0 && (
         <div className="text-center text-sm text-[#8b8b99]">
-          Clips: {totalDuration.toFixed(1)}s × $0.05 = 
+          Clips: {project.clips.length} × $0.25 =
           <span className="text-[#e94560] ml-1">${totalCost.toFixed(2)}</span>
         </div>
       )}

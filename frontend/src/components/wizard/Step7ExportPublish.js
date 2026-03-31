@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { Download, Copy, Check, Film, ArrowRight, Smartphone } from 'lucide-react';
+import { Download, Copy, Check, Film, ArrowRight, Smartphone, Loader2 } from 'lucide-react';
+
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const PLATFORMS = [
   { id: 'tiktok', name: 'TikTok', icon: '🎵', resolution: '1080x1920', ratio: '9:16', format: 'MP4' },
@@ -7,7 +9,7 @@ const PLATFORMS = [
   { id: 'instagram', name: 'Instagram Reels', icon: '📸', resolution: '1080x1920', ratio: '9:16', format: 'MP4' },
 ];
 
-export default function Step7ExportPublish({ project, onCreateAnother }) {
+export default function Step7ExportPublish({ project, projectId, onCreateAnother }) {
   const [copiedField, setCopiedField] = useState(null);
   const [downloading, setDownloading] = useState(null);
 
@@ -29,20 +31,80 @@ export default function Step7ExportPublish({ project, onCreateAnother }) {
   };
 
   const handleDownload = async (platformId) => {
+    if (!projectId) return;
+
     setDownloading(platformId);
-    // Placeholder: simulate download
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // In real implementation, this would trigger a file download
-    alert(`Download for ${platformId} would start here (placeholder)`);
-    setDownloading(null);
+
+    try {
+      // Create a download link
+      const downloadUrl = `${API}/projects/${projectId}/download/${platformId}`;
+
+      // Create a temporary anchor element to trigger download
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', '');
+
+      // We need to include credentials, so use fetch instead
+      const response = await fetch(downloadUrl, {
+        credentials: 'include'
+      });
+
+      if (!response.ok) {
+        throw new Error('Download failed');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${platformId}_${project.title || 'video'}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error('Download failed:', err);
+      alert('Download failed. Please make sure the video is assembled first.');
+    } finally {
+      setDownloading(null);
+    }
   };
 
   const handleDownloadZip = async () => {
+    if (!projectId) return;
+
     setDownloading('zip');
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    alert('ZIP download would start here (placeholder)');
-    setDownloading(null);
+
+    try {
+      const downloadUrl = `${API}/projects/${projectId}/download-zip`;
+
+      const response = await fetch(downloadUrl, {
+        credentials: 'include'
+      });
+
+      if (!response.ok) {
+        throw new Error('Download failed');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project.title || 'project'}_files.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error('ZIP download failed:', err);
+      alert('ZIP download failed. Please try again.');
+    } finally {
+      setDownloading(null);
+    }
   };
 
   return (
@@ -55,6 +117,21 @@ export default function Step7ExportPublish({ project, onCreateAnother }) {
           Download your video and copy publishing info
         </p>
       </div>
+
+      {/* Video Preview */}
+      {project.assembledVideo?.url && (
+        <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
+          <h3 className="font-heading font-semibold text-[#f8f8f8] mb-4">Final Video Preview</h3>
+          <div className="aspect-video bg-[#0c0c0f] rounded-lg overflow-hidden">
+            <video
+              src={`${process.env.REACT_APP_BACKEND_URL}${project.assembledVideo.url}`}
+              className="w-full h-full"
+              controls
+              playsInline
+            />
+          </div>
+        </div>
+      )}
 
       {/* Download Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -71,12 +148,15 @@ export default function Step7ExportPublish({ project, onCreateAnother }) {
             </div>
             <button
               onClick={() => handleDownload(platform.id)}
-              disabled={downloading !== null}
+              disabled={downloading !== null || !project.assembledVideo}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#e94560] text-white rounded-lg hover:bg-[#f25a74] transition-all disabled:opacity-50"
               data-testid={`download-${platform.id}`}
             >
               {downloading === platform.id ? (
-                <span className="animate-pulse">Preparing...</span>
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Downloading...
+                </>
               ) : (
                 <>
                   <Download className="w-4 h-4" />
@@ -97,11 +177,14 @@ export default function Step7ExportPublish({ project, onCreateAnother }) {
           data-testid="download-zip"
         >
           {downloading === 'zip' ? (
-            <span className="animate-pulse">Creating ZIP...</span>
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              Creating ZIP...
+            </>
           ) : (
             <>
               <Download className="w-5 h-5" />
-              Download as ZIP (all formats)
+              Download as ZIP (all files)
             </>
           )}
         </button>
@@ -220,7 +303,7 @@ export default function Step7ExportPublish({ project, onCreateAnother }) {
           <div className="text-center">
             <Smartphone className="w-6 h-6 text-[#e94560] mx-auto mb-2" />
             <p className="text-sm text-[#8b8b99]">Duration</p>
-            <p className="text-[#f8f8f8] font-medium">{totalDuration}s</p>
+            <p className="text-[#f8f8f8] font-medium">{totalDuration.toFixed(1)}s</p>
           </div>
           <div className="text-center">
             <span className="text-2xl block mb-2">💰</span>

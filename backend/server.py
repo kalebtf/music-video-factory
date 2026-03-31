@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -24,6 +24,8 @@ import aiofiles
 import json
 import subprocess
 import asyncio
+import zipfile
+import io
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -636,7 +638,7 @@ async def upload_audio(project_id: str, request: Request, file: UploadFile = Fil
 
 @api_router.post("/audio/detect-climax/{project_id}")
 async def detect_climax(project_id: str, request: Request):
-    """Auto-detect the climax section using librosa RMS energy analysis"""
+    """Auto-detect the climax section using audio energy analysis"""
     user = await get_current_user(request)
     
     project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
@@ -645,42 +647,78 @@ async def detect_climax(project_id: str, request: Request):
     
     audio_path = project.get("audioOriginalPath")
     if not audio_path or not Path(audio_path).exists():
-        raise HTTPException(status_code=400, detail="No audio file uploaded")
+        raise HTTPException(status_code=400, detail="No audio file uploaded. Please upload an audio file first.")
     
     try:
-        import librosa
-        import numpy as np
-        
-        # Load audio
-        y, sr = librosa.load(audio_path, sr=22050)
-        duration = librosa.get_duration(y=y, sr=sr)
-        
-        # Calculate RMS energy
-        hop_length = 512
-        rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
-        
-        # Convert frames to time
-        times = librosa.frames_to_time(range(len(rms)), sr=sr, hop_length=hop_length)
-        
-        # Find 35-45 second window with highest average energy
-        window_sizes = [35, 40, 45]  # Try different window sizes
-        best_start = 0
-        best_energy = 0
-        best_window = 40
-        
-        for window_sec in window_sizes:
-            window_frames = int(window_sec * sr / hop_length)
+        # Try librosa first, fall back to pydub
+        try:
+            import librosa
+            import numpy as np
             
-            for i in range(len(rms) - window_frames):
-                avg_energy = np.mean(rms[i:i + window_frames])
-                if avg_energy > best_energy:
-                    best_energy = avg_energy
-                    best_start = times[i]
-                    best_window = window_sec
-        
-        # Ensure we don't exceed audio duration
-        climax_start = max(0, best_start)
-        climax_end = min(duration, climax_start + best_window)
+            # Load audio
+            y, sr = librosa.load(audio_path, sr=22050)
+            duration = librosa.get_duration(y=y, sr=sr)
+            
+            # Calculate RMS energy
+            hop_length = 512
+            rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+            
+            # Convert frames to time
+            times = librosa.frames_to_time(range(len(rms)), sr=sr, hop_length=hop_length)
+            
+            # Find 35-45 second window with highest average energy
+            window_sizes = [35, 40, 45]
+            best_start = 0
+            best_energy = 0
+            best_window = 40
+            
+            for window_sec in window_sizes:
+                window_frames = int(window_sec * sr / hop_length)
+                
+                for i in range(max(1, len(rms) - window_frames)):
+                    avg_energy = np.mean(rms[i:i + window_frames])
+                    if avg_energy > best_energy:
+                        best_energy = avg_energy
+                        best_start = times[i] if i < len(times) else 0
+                        best_window = window_sec
+            
+            climax_start = max(0, best_start)
+            climax_end = min(duration, climax_start + best_window)
+            
+        except Exception as librosa_error:
+            logger.warning(f"Librosa failed, using pydub fallback: {librosa_error}")
+            
+            # Fallback to pydub
+            from pydub import AudioSegment
+            import math
+            
+            audio = AudioSegment.from_file(audio_path)
+            duration = len(audio) / 1000.0  # Convert to seconds
+            
+            # Calculate RMS for each 1-second chunk
+            chunk_duration = 1000  # 1 second in ms
+            rms_values = []
+            
+            for i in range(0, len(audio), chunk_duration):
+                chunk = audio[i:i + chunk_duration]
+                if len(chunk) > 0:
+                    rms = chunk.rms
+                    rms_values.append(rms)
+            
+            # Find 40-second window with highest average RMS
+            window_size = 40  # seconds
+            best_start = 0
+            best_avg_rms = 0
+            
+            for i in range(max(1, len(rms_values) - window_size)):
+                window_rms = rms_values[i:i + window_size]
+                avg_rms = sum(window_rms) / len(window_rms) if window_rms else 0
+                if avg_rms > best_avg_rms:
+                    best_avg_rms = avg_rms
+                    best_start = i
+            
+            climax_start = float(best_start)
+            climax_end = min(duration, climax_start + 40)
         
         # Update project
         await db.projects.update_one(
@@ -692,12 +730,12 @@ async def detect_climax(project_id: str, request: Request):
             "start": round(climax_start, 2),
             "end": round(climax_end, 2),
             "duration": round(climax_end - climax_start, 2),
-            "message": f"Climax detected at {int(climax_start//60)}:{int(climax_start%60):02d} - {int(climax_end//60)}:{int(climax_end%60):02d}"
+            "message": f"Climax detected at {int(climax_start//60)}:{int(climax_start%60):02d} - {int(climax_end//60)}:{int(climax_end%60):02d} - adjust if needed"
         }
         
     except Exception as e:
         logger.error(f"Climax detection failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Climax detection failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Climax detection failed: {str(e)}. Please select manually.")
 
 @api_router.post("/audio/extract-climax/{project_id}")
 async def extract_climax(project_id: str, data: ClimaxExtractionRequest, request: Request):
@@ -1056,6 +1094,449 @@ async def update_project_images(project_id: str, data: UpdateImagesRequest, requ
     result = await db.projects.update_one(
         {"_id": ObjectId(project_id), "userId": user["_id"]},
         {"$set": {"images": data.images}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    return {"success": True}
+
+# ========================================
+# FAL.AI VIDEO ANIMATION ENDPOINTS
+# ========================================
+
+async def get_user_falai_key(user_id: str) -> Optional[str]:
+    """Get user's decrypted FAL.AI API key"""
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        return None
+    encrypted_key = user.get("apiKeys", {}).get("falai")
+    if not encrypted_key:
+        return None
+    return decrypt_api_key(encrypted_key)
+
+class AnimateImageRequest(BaseModel):
+    projectId: str
+    imageIndex: int
+    imagePath: str
+    prompt: str
+
+@api_router.post("/ai/animate-image")
+async def animate_image(data: AnimateImageRequest, request: Request):
+    """Animate an image using FAL.AI Wan image-to-video"""
+    user = await get_current_user(request)
+    
+    # Get FAL.AI key
+    fal_key = await get_user_falai_key(user["_id"])
+    if not fal_key:
+        raise HTTPException(status_code=400, detail="Please save your FAL.AI API key in Settings first.")
+    
+    # Verify project
+    project = await db.projects.find_one({"_id": ObjectId(data.projectId), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Read image and convert to base64 data URI
+    image_path = Path(data.imagePath)
+    if not image_path.exists():
+        # Try alternative path
+        image_path = PROJECTS_DIR / data.projectId / "images" / f"img_{data.imageIndex}.png"
+    
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found")
+    
+    try:
+        async with aiofiles.open(image_path, 'rb') as f:
+            image_data = await f.read()
+        
+        image_b64 = base64.b64encode(image_data).decode('utf-8')
+        image_data_uri = f"data:image/png;base64,{image_b64}"
+        
+        # Submit job to FAL.AI
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            submit_response = await client.post(
+                "https://queue.fal.run/fal-ai/wan/image-to-video",
+                headers={
+                    "Authorization": f"Key {fal_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "image_url": image_data_uri,
+                    "prompt": f"{data.prompt}, cinematic, emotional, smooth camera movement, high quality",
+                    "negative_prompt": "blurry, distorted, text, watermark, low quality, static, jerky",
+                    "num_inference_steps": 30,
+                    "num_frames": 81,
+                    "fps": 16,
+                    "guidance_scale": 5.0,
+                    "image_size": {"width": 576, "height": 1024}
+                }
+            )
+            
+            if submit_response.status_code != 200:
+                error_text = submit_response.text
+                logger.error(f"FAL.AI submit error: {error_text}")
+                raise HTTPException(status_code=submit_response.status_code, detail=f"FAL.AI error: {error_text[:200]}")
+            
+            result = submit_response.json()
+            request_id = result.get("request_id")
+            
+            if not request_id:
+                raise HTTPException(status_code=500, detail="FAL.AI did not return a request ID")
+            
+            return {
+                "success": True,
+                "requestId": request_id,
+                "status": "IN_QUEUE"
+            }
+            
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="FAL.AI request timeout. Please try again.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Video animation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Video animation failed: {str(e)}")
+
+@api_router.get("/ai/animation-status/{request_id}")
+async def get_animation_status(request_id: str, project_id: str, image_index: int, request: Request):
+    """Poll FAL.AI for animation job status"""
+    user = await get_current_user(request)
+    
+    fal_key = await get_user_falai_key(user["_id"])
+    if not fal_key:
+        raise HTTPException(status_code=400, detail="FAL.AI API key not configured")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            status_response = await client.get(
+                f"https://queue.fal.run/fal-ai/wan/image-to-video/status/{request_id}",
+                headers={"Authorization": f"Key {fal_key}"}
+            )
+            
+            if status_response.status_code != 200:
+                return {"status": "ERROR", "error": status_response.text}
+            
+            status_data = status_response.json()
+            status = status_data.get("status", "UNKNOWN")
+            
+            if status == "COMPLETED":
+                # Get the result
+                result_response = await client.get(
+                    f"https://queue.fal.run/fal-ai/wan/image-to-video/result/{request_id}",
+                    headers={"Authorization": f"Key {fal_key}"}
+                )
+                
+                if result_response.status_code == 200:
+                    result_data = result_response.json()
+                    video_url = result_data.get("video", {}).get("url")
+                    
+                    if video_url:
+                        # Download and save video
+                        video_response = await client.get(video_url)
+                        if video_response.status_code == 200:
+                            # Save to project directory
+                            clips_dir = PROJECTS_DIR / project_id / "clips"
+                            clips_dir.mkdir(parents=True, exist_ok=True)
+                            clip_path = clips_dir / f"clip_{image_index}.mp4"
+                            
+                            async with aiofiles.open(clip_path, 'wb') as f:
+                                await f.write(video_response.content)
+                            
+                            # Log cost (estimated 5s at $0.05/s = $0.25)
+                            cost = 0.25
+                            await db.cost_logs.insert_one({
+                                "userId": user["_id"],
+                                "projectId": project_id,
+                                "date": datetime.now(timezone.utc).isoformat(),
+                                "action": "video",
+                                "provider": "fal-wan2.6",
+                                "cost": cost,
+                                "details": f"Clip {image_index} animation"
+                            })
+                            
+                            await db.projects.update_one(
+                                {"_id": ObjectId(project_id)},
+                                {"$inc": {"totalCost": cost}}
+                            )
+                            
+                            return {
+                                "status": "COMPLETED",
+                                "clipUrl": f"/api/projects/{project_id}/clips/clip_{image_index}.mp4",
+                                "clipPath": str(clip_path),
+                                "cost": cost
+                            }
+                
+                return {"status": "COMPLETED", "error": "Failed to download video"}
+            
+            return {"status": status}
+            
+    except Exception as e:
+        logger.error(f"Status check failed: {e}")
+        return {"status": "ERROR", "error": str(e)}
+
+# Serve project clips
+@api_router.get("/projects/{project_id}/clips/{filename}")
+async def get_project_clip(project_id: str, filename: str, request: Request):
+    """Serve generated video clips"""
+    user = await get_current_user(request)
+    
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    clip_path = PROJECTS_DIR / project_id / "clips" / filename
+    if not clip_path.exists():
+        raise HTTPException(status_code=404, detail="Clip not found")
+    
+    return FileResponse(clip_path, media_type="video/mp4")
+
+# ========================================
+# VIDEO ASSEMBLY ENDPOINTS
+# ========================================
+
+class AssembleVideoRequest(BaseModel):
+    projectId: str
+    clipOrder: List[int]
+    crossfadeDuration: float = 0.5
+    addTextOverlay: bool = True
+    hookText: Optional[str] = None
+
+@api_router.post("/video/assemble")
+async def assemble_video(data: AssembleVideoRequest, request: Request):
+    """Assemble final video from clips using FFmpeg"""
+    user = await get_current_user(request)
+    
+    project = await db.projects.find_one({"_id": ObjectId(data.projectId), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    clips_dir = PROJECTS_DIR / data.projectId / "clips"
+    final_dir = PROJECTS_DIR / data.projectId / "final"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Get clip paths in order
+    clip_paths = []
+    for idx in data.clipOrder:
+        clip_path = clips_dir / f"clip_{idx}.mp4"
+        if clip_path.exists():
+            clip_paths.append(str(clip_path))
+    
+    if len(clip_paths) < 2:
+        raise HTTPException(status_code=400, detail="Need at least 2 clips to assemble video")
+    
+    # Get audio path
+    audio_path = project.get("audioClimaxPath") or project.get("audioOriginalPath")
+    
+    output_path = final_dir / "video.mp4"
+    
+    try:
+        # Create concat file for FFmpeg
+        concat_file = final_dir / "concat.txt"
+        async with aiofiles.open(concat_file, 'w') as f:
+            for path in clip_paths:
+                await f.write(f"file '{path}'\n")
+        
+        # Build FFmpeg command
+        # First concat clips
+        concat_output = final_dir / "concat_temp.mp4"
+        concat_cmd = [
+            'ffmpeg', '-y',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', str(concat_file),
+            '-c', 'copy',
+            str(concat_output)
+        ]
+        
+        result = subprocess.run(concat_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"FFmpeg concat error: {result.stderr}")
+        
+        # Build filter for crossfades, text overlay, and audio
+        filter_parts = []
+        
+        # Add fade in/out
+        filter_parts.append("fade=t=in:st=0:d=1,fade=t=out:st=end-1:d=1")
+        
+        # Add text overlay if enabled
+        if data.addTextOverlay and data.hookText:
+            safe_text = data.hookText.replace("'", "'\\''").replace(":", "\\:")
+            filter_parts.append(f"drawtext=text='{safe_text}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h-200:shadowcolor=black:shadowx=2:shadowy=2:enable='lt(t,4)'")
+        
+        video_filter = ','.join(filter_parts) if filter_parts else None
+        
+        # Final assembly with audio
+        final_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
+        
+        if audio_path and Path(audio_path).exists():
+            final_cmd.extend(['-i', audio_path])
+        
+        final_cmd.extend([
+            '-vf', video_filter if video_filter else 'null',
+            '-c:v', 'libx264',
+            '-preset', 'medium',
+            '-crf', '23',
+            '-r', '30',
+            '-s', '1080x1920'
+        ])
+        
+        if audio_path and Path(audio_path).exists():
+            final_cmd.extend([
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-shortest'
+            ])
+        else:
+            final_cmd.extend(['-an'])
+        
+        final_cmd.append(str(output_path))
+        
+        result = subprocess.run(final_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"FFmpeg assembly error: {result.stderr}")
+            # Try simpler command without filters
+            simple_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
+            if audio_path and Path(audio_path).exists():
+                simple_cmd.extend(['-i', audio_path, '-shortest'])
+            simple_cmd.extend(['-c:v', 'libx264', '-c:a', 'aac', str(output_path)])
+            subprocess.run(simple_cmd, capture_output=True)
+        
+        # Clean up temp files
+        if concat_output.exists():
+            concat_output.unlink()
+        if concat_file.exists():
+            concat_file.unlink()
+        
+        # Get video info
+        duration = 0
+        file_size = 0
+        if output_path.exists():
+            file_size = output_path.stat().st_size / (1024 * 1024)  # MB
+            probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', str(output_path)]
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            if probe_result.returncode == 0:
+                probe_data = json.loads(probe_result.stdout)
+                duration = float(probe_data.get('format', {}).get('duration', 0))
+        
+        # Update project
+        await db.projects.update_one(
+            {"_id": ObjectId(data.projectId)},
+            {"$set": {
+                "finalVideoPath": str(output_path),
+                "status": "done"
+            }}
+        )
+        
+        return {
+            "success": True,
+            "videoUrl": f"/api/projects/{data.projectId}/final/video.mp4",
+            "duration": round(duration, 2),
+            "fileSize": round(file_size, 2)
+        }
+        
+    except Exception as e:
+        logger.error(f"Video assembly failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Video assembly failed: {str(e)}")
+
+# Serve final video
+@api_router.get("/projects/{project_id}/final/{filename}")
+async def get_final_video(project_id: str, filename: str, request: Request):
+    """Serve final assembled video"""
+    user = await get_current_user(request)
+    
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    video_path = PROJECTS_DIR / project_id / "final" / filename
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    return FileResponse(video_path, media_type="video/mp4")
+
+# ========================================
+# DOWNLOAD ENDPOINTS
+# ========================================
+
+@api_router.get("/projects/{project_id}/download/{platform}")
+async def download_video(project_id: str, platform: str, request: Request):
+    """Download video for specific platform"""
+    user = await get_current_user(request)
+    
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    final_path = PROJECTS_DIR / project_id / "final" / "video.mp4"
+    if not final_path.exists():
+        raise HTTPException(status_code=404, detail="Video not assembled yet")
+    
+    title = project.get("title", "video").replace(" ", "_")[:30]
+    filename = f"{platform}_{title}.mp4"
+    
+    return FileResponse(
+        final_path,
+        media_type="video/mp4",
+        filename=filename,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@api_router.get("/projects/{project_id}/download-zip")
+async def download_zip(project_id: str, request: Request):
+    """Download all project files as ZIP"""
+    user = await get_current_user(request)
+    
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    project_dir = PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="Project files not found")
+    
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Add all files from project directory
+        for folder in ['audio', 'images', 'clips', 'final']:
+            folder_path = project_dir / folder
+            if folder_path.exists():
+                for file in folder_path.iterdir():
+                    if file.is_file():
+                        zip_file.write(file, f"{folder}/{file.name}")
+        
+        # Add metadata
+        metadata = {
+            "title": project.get("title"),
+            "genre": project.get("genre"),
+            "createdAt": project.get("createdAt"),
+            "totalCost": project.get("totalCost", 0),
+            "concept": project.get("concept", {})
+        }
+        zip_file.writestr("metadata.json", json.dumps(metadata, indent=2))
+    
+    zip_buffer.seek(0)
+    title = project.get("title", "project").replace(" ", "_")[:30]
+    
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={title}_project.zip"}
+    )
+
+# Update project clips endpoint
+class UpdateClipsRequest(BaseModel):
+    clips: List[Dict[str, Any]]
+
+@api_router.put("/projects/{project_id}/clips")
+async def update_project_clips(project_id: str, data: UpdateClipsRequest, request: Request):
+    """Update project clips array"""
+    user = await get_current_user(request)
+    
+    result = await db.projects.update_one(
+        {"_id": ObjectId(project_id), "userId": user["_id"]},
+        {"$set": {"clips": data.clips}}
     )
     
     if result.matched_count == 0:
