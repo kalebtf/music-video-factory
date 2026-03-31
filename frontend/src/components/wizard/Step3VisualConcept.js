@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Palette, Wand2, Plus, Trash2, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
 import axios from 'axios';
 
@@ -7,17 +7,39 @@ const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 export default function Step3VisualConcept({ project, updateProject, projectId }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState('');
-  const [hasAutoAnalyzed, setHasAutoAnalyzed] = useState(false);
-  const hasTemplate = project.template !== null;
-  const hasExistingConcept = project.concept.theme || project.concept.prompts.some(p => p);
+  const hasAnalyzedRef = useRef(false);
+  
+  // Check if we have content (either from template or previous analysis)
+  const hasContent = project.concept.theme || 
+                     project.concept.mood || 
+                     project.concept.prompts.some(p => p && p.trim());
 
-  // Auto-analyze when entering step if no concept exists and no template selected
+  // Auto-fill from template OR auto-analyze on first render
   useEffect(() => {
-    if (!hasAutoAnalyzed && !hasTemplate && !hasExistingConcept && projectId && project.lyrics) {
+    if (hasAnalyzedRef.current) return;
+    hasAnalyzedRef.current = true;
+
+    // If template was selected, populate from template
+    if (project.template) {
+      const template = project.template;
+      updateProject({
+        concept: {
+          ...project.concept,
+          theme: template.visualStyle || project.concept.theme || '',
+          mood: template.animationStyle || project.concept.mood || '',
+          palette: template.colorPalette || project.concept.palette || ['#1a1a2e', '#e94560', '#0f3460', '#f0a500'],
+          prompts: template.imagePrompts || project.concept.prompts || ['', '', ''],
+          hooks: template.textHooks || project.concept.hooks || [],
+          selectedHooks: [],
+          numImages: template.imagePrompts?.length || project.concept.numImages || 3,
+        }
+      });
+    } 
+    // If no template and no content, auto-trigger AI analysis
+    else if (!hasContent && projectId && project.lyrics) {
       handleAnalyze();
-      setHasAutoAnalyzed(true);
     }
-  }, [projectId]);
+  }, []);
 
   const handleAnalyze = async () => {
     if (!projectId) {
@@ -44,12 +66,13 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
         concept: {
           ...project.concept,
           theme: data.theme || '',
-          mood: data.mood || '',
+          mood: data.mood || data.animationStyle || '',
           animationStyle: data.animationStyle || '',
           palette: data.palette || ['#1a1a2e', '#e94560', '#0f3460', '#f0a500'],
           prompts: data.prompts || ['', '', ''],
           hooks: data.hooks || [],
           selectedHooks: [],
+          numImages: data.prompts?.length || 3,
         }
       });
     } catch (err) {
@@ -111,7 +134,9 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
           Visual Concept
         </h2>
         <p className="text-[#8b8b99]">
-          {hasTemplate ? 'Review and customize your visual concept' : 'AI-generated visual concept based on your song'}
+          {project.template 
+            ? `Using "${project.template.name}" template - customize as needed` 
+            : 'AI-generated visual concept based on your song'}
         </p>
       </div>
 
@@ -132,23 +157,34 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
         </div>
       )}
 
-      {/* Analyze Button (if no concept and not analyzing) */}
-      {!analyzing && !hasExistingConcept && (
-        <div className="flex justify-center mb-8">
+      {/* Analyze Button (show prominently if no content) */}
+      {!analyzing && !hasContent && (
+        <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-8 flex flex-col items-center justify-center">
+          <Wand2 className="w-12 h-12 text-[#e94560] mb-4" />
+          <h3 className="font-heading text-lg font-semibold text-[#f8f8f8] mb-2">
+            Generate Visual Concept with AI
+          </h3>
+          <p className="text-[#8b8b99] text-center mb-4 max-w-md">
+            Based on your song title, genre, and lyrics, AI will suggest a visual theme, mood, 
+            color palette, and image prompts for your music video.
+          </p>
           <button
             onClick={handleAnalyze}
-            disabled={analyzing}
+            disabled={analyzing || !project.lyrics}
             className="flex items-center gap-2 px-6 py-3 bg-[#e94560] text-white rounded-lg hover:bg-[#f25a74] transition-all disabled:opacity-50"
             data-testid="analyze-button"
           >
             <Wand2 className="w-5 h-5" />
             Analyze with AI
           </button>
+          {!project.lyrics && (
+            <p className="text-[#f59e0b] text-sm mt-2">Please add lyrics in Step 1 first</p>
+          )}
         </div>
       )}
 
-      {/* Main Content (show when not analyzing) */}
-      {!analyzing && (
+      {/* Main Content (show when not analyzing AND we have content) */}
+      {!analyzing && hasContent && (
         <>
           {/* Theme & Mood */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -162,17 +198,23 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
                 className="w-full bg-[#0c0c0f] border border-[#2a2a35] rounded-lg px-4 py-3 text-[#f8f8f8] placeholder-[#8b8b99] focus:ring-1 focus:ring-[#e94560] focus:border-[#e94560] transition-all resize-none"
                 data-testid="theme-input"
               />
+              <p className="text-xs text-[#8b8b99] mt-1">
+                The visual world of your video (e.g., rainy city, desert sunset)
+              </p>
             </div>
             <div>
               <label className="block text-sm text-[#8b8b99] mb-2">Mood / Animation Style</label>
               <textarea
-                value={project.concept.mood || project.concept.animationStyle}
+                value={project.concept.mood || project.concept.animationStyle || ''}
                 onChange={(e) => updateConcept('mood', e.target.value)}
                 placeholder="e.g., Slow zoom, melancholic, dreamy transitions..."
                 rows={3}
                 className="w-full bg-[#0c0c0f] border border-[#2a2a35] rounded-lg px-4 py-3 text-[#f8f8f8] placeholder-[#8b8b99] focus:ring-1 focus:ring-[#e94560] focus:border-[#e94560] transition-all resize-none"
                 data-testid="mood-input"
               />
+              <p className="text-xs text-[#8b8b99] mt-1">
+                How images should animate and feel (e.g., slow zoom, gentle drift)
+              </p>
             </div>
           </div>
 
@@ -206,7 +248,7 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
 
           {/* Image Prompts */}
           <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-2">
               <h3 className="font-heading font-semibold text-[#f8f8f8]">Image Prompts</h3>
               <button
                 onClick={addPrompt}
@@ -217,6 +259,9 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
                 Add
               </button>
             </div>
+            <p className="text-xs text-[#8b8b99] mb-4">
+              Detailed description of each image to generate. Be specific about lighting, angle, atmosphere.
+            </p>
             <div className="space-y-3">
               {project.concept.prompts.map((prompt, index) => (
                 <div key={index} className="flex gap-2">
@@ -244,7 +289,7 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
 
           {/* Number of Images */}
           <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
-            <h3 className="font-heading font-semibold text-[#f8f8f8] mb-4">Number of Images</h3>
+            <h3 className="font-heading font-semibold text-[#f8f8f8] mb-4">Number of Images to Generate</h3>
             <div className="flex gap-3">
               {[2, 3, 5, 8].map((num) => (
                 <button
@@ -269,11 +314,14 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
             <textarea
               value={project.concept.customInstructions || ''}
               onChange={(e) => updateConcept('customInstructions', e.target.value)}
-              placeholder="e.g., anime style, add rain effects, use film grain..."
+              placeholder="e.g., anime style, add rain effects, use film grain, neon colors..."
               rows={2}
               className="w-full bg-[#0c0c0f] border border-[#2a2a35] rounded-lg px-4 py-3 text-[#f8f8f8] placeholder-[#8b8b99] focus:ring-1 focus:ring-[#e94560] focus:border-[#e94560] transition-all resize-none"
               data-testid="custom-instructions-input"
             />
+            <p className="text-xs text-[#8b8b99] mt-1">
+              Extra style or effects to apply to ALL images (e.g., anime style, film grain)
+            </p>
           </div>
 
           {/* Text Hooks */}

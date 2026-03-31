@@ -27,6 +27,13 @@ import asyncio
 import zipfile
 import io
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -638,7 +645,7 @@ async def upload_audio(project_id: str, request: Request, file: UploadFile = Fil
 
 @api_router.post("/audio/detect-climax/{project_id}")
 async def detect_climax(project_id: str, request: Request):
-    """Auto-detect the climax section using audio energy analysis"""
+    """Auto-detect the climax section using pydub loudness analysis"""
     user = await get_current_user(request)
     
     project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
@@ -646,75 +653,48 @@ async def detect_climax(project_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Project not found")
     
     audio_path = project.get("audioOriginalPath")
-    if not audio_path or not Path(audio_path).exists():
+    if not audio_path:
         raise HTTPException(status_code=400, detail="No audio file uploaded. Please upload an audio file first.")
     
+    if not Path(audio_path).exists():
+        logger.error(f"Audio file not found at path: {audio_path}")
+        raise HTTPException(status_code=400, detail=f"Audio file not found at: {audio_path}")
+    
     try:
-        # Try librosa first, fall back to pydub
-        try:
-            import librosa
-            import numpy as np
-            
-            # Load audio
-            y, sr = librosa.load(audio_path, sr=22050)
-            duration = librosa.get_duration(y=y, sr=sr)
-            
-            # Calculate RMS energy
-            hop_length = 512
-            rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
-            
-            # Convert frames to time
-            times = librosa.frames_to_time(range(len(rms)), sr=sr, hop_length=hop_length)
-            
-            # Find 35-45 second window with highest average energy
-            window_sizes = [35, 40, 45]
+        from pydub import AudioSegment
+        
+        logger.info(f"Loading audio from: {audio_path}")
+        audio = AudioSegment.from_file(audio_path)
+        duration = len(audio) / 1000.0  # Convert to seconds
+        
+        logger.info(f"Audio loaded. Duration: {duration}s")
+        
+        # Calculate dBFS loudness for each 1-second segment
+        loudness_values = []
+        for i in range(int(duration)):
+            chunk = audio[i * 1000:(i + 1) * 1000]
+            if len(chunk) > 0:
+                # dBFS returns negative values, higher = louder
+                loudness_db = chunk.dBFS if chunk.dBFS > -float('inf') else -60
+                loudness_values.append(loudness_db)
+        
+        logger.info(f"Calculated loudness for {len(loudness_values)} segments")
+        
+        if len(loudness_values) < 40:
+            # Audio too short, return full range
+            climax_start = 0
+            climax_end = duration
+        else:
+            # Find 40-second window with highest average loudness
+            window_size = 40
             best_start = 0
-            best_energy = 0
-            best_window = 40
+            best_avg_loudness = -float('inf')
             
-            for window_sec in window_sizes:
-                window_frames = int(window_sec * sr / hop_length)
-                
-                for i in range(max(1, len(rms) - window_frames)):
-                    avg_energy = np.mean(rms[i:i + window_frames])
-                    if avg_energy > best_energy:
-                        best_energy = avg_energy
-                        best_start = times[i] if i < len(times) else 0
-                        best_window = window_sec
-            
-            climax_start = max(0, best_start)
-            climax_end = min(duration, climax_start + best_window)
-            
-        except Exception as librosa_error:
-            logger.warning(f"Librosa failed, using pydub fallback: {librosa_error}")
-            
-            # Fallback to pydub
-            from pydub import AudioSegment
-            import math
-            
-            audio = AudioSegment.from_file(audio_path)
-            duration = len(audio) / 1000.0  # Convert to seconds
-            
-            # Calculate RMS for each 1-second chunk
-            chunk_duration = 1000  # 1 second in ms
-            rms_values = []
-            
-            for i in range(0, len(audio), chunk_duration):
-                chunk = audio[i:i + chunk_duration]
-                if len(chunk) > 0:
-                    rms = chunk.rms
-                    rms_values.append(rms)
-            
-            # Find 40-second window with highest average RMS
-            window_size = 40  # seconds
-            best_start = 0
-            best_avg_rms = 0
-            
-            for i in range(max(1, len(rms_values) - window_size)):
-                window_rms = rms_values[i:i + window_size]
-                avg_rms = sum(window_rms) / len(window_rms) if window_rms else 0
-                if avg_rms > best_avg_rms:
-                    best_avg_rms = avg_rms
+            for i in range(len(loudness_values) - window_size + 1):
+                window = loudness_values[i:i + window_size]
+                avg_loudness = sum(window) / len(window)
+                if avg_loudness > best_avg_loudness:
+                    best_avg_loudness = avg_loudness
                     best_start = i
             
             climax_start = float(best_start)
@@ -726,6 +706,8 @@ async def detect_climax(project_id: str, request: Request):
             {"$set": {"climaxStart": climax_start, "climaxEnd": climax_end}}
         )
         
+        logger.info(f"Climax detected: {climax_start}s - {climax_end}s")
+        
         return {
             "start": round(climax_start, 2),
             "end": round(climax_end, 2),
@@ -734,8 +716,10 @@ async def detect_climax(project_id: str, request: Request):
         }
         
     except Exception as e:
-        logger.error(f"Climax detection failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Climax detection failed: {str(e)}. Please select manually.")
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Climax detection failed: {error_trace}")
+        raise HTTPException(status_code=500, detail=f"Climax detection failed: {str(e)}")
 
 @api_router.post("/audio/extract-climax/{project_id}")
 async def extract_climax(project_id: str, data: ClimaxExtractionRequest, request: Request):
@@ -747,26 +731,48 @@ async def extract_climax(project_id: str, data: ClimaxExtractionRequest, request
         raise HTTPException(status_code=404, detail="Project not found")
     
     audio_path = project.get("audioOriginalPath")
-    if not audio_path or not Path(audio_path).exists():
+    if not audio_path:
         raise HTTPException(status_code=400, detail="No audio file uploaded")
     
+    if not Path(audio_path).exists():
+        logger.error(f"Audio file not found: {audio_path}")
+        raise HTTPException(status_code=400, detail=f"Audio file not found: {audio_path}")
+    
     try:
+        # Ensure output directory exists
         project_dir = PROJECTS_DIR / project_id / "audio"
+        project_dir.mkdir(parents=True, exist_ok=True)
         climax_path = project_dir / "climax.mp3"
+        
+        logger.info(f"Extracting climax: {audio_path} -> {climax_path}")
+        logger.info(f"Time range: {data.start}s to {data.end}s")
+        
+        # Check if ffmpeg is available
+        ffmpeg_check = subprocess.run(['which', 'ffmpeg'], capture_output=True, text=True)
+        if ffmpeg_check.returncode != 0:
+            logger.error("ffmpeg not found, attempting to install...")
+            install_result = subprocess.run(['apt-get', 'install', '-y', 'ffmpeg'], capture_output=True, text=True)
+            logger.info(f"ffmpeg install result: {install_result.returncode}")
         
         # Run ffmpeg to extract segment
         cmd = [
             'ffmpeg', '-y',
-            '-i', audio_path,
+            '-i', str(audio_path),
             '-ss', str(data.start),
             '-to', str(data.end),
             '-c', 'copy',
             str(climax_path)
         ]
         
+        logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
+        
         if result.returncode != 0:
-            raise Exception(f"ffmpeg error: {result.stderr}")
+            logger.error(f"ffmpeg stderr: {result.stderr}")
+            raise Exception(f"ffmpeg error: {result.stderr[:500]}")
+        
+        if not climax_path.exists():
+            raise Exception("Output file was not created")
         
         # Update project
         await db.projects.update_one(
@@ -778,6 +784,8 @@ async def extract_climax(project_id: str, data: ClimaxExtractionRequest, request
             }}
         )
         
+        logger.info(f"Climax extracted successfully: {climax_path}")
+        
         return {
             "success": True,
             "climaxPath": str(climax_path),
@@ -785,7 +793,9 @@ async def extract_climax(project_id: str, data: ClimaxExtractionRequest, request
         }
         
     except Exception as e:
-        logger.error(f"Climax extraction failed: {e}")
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Climax extraction failed: {error_trace}")
         raise HTTPException(status_code=500, detail=f"Climax extraction failed: {str(e)}")
 
 # ========================================
@@ -979,6 +989,17 @@ async def generate_image(data: GenerateImageRequest, request: Request):
         project_dir = PROJECTS_DIR / data.projectId / "images"
         project_dir.mkdir(parents=True, exist_ok=True)
         
+        # Prepare request body
+        request_body = {
+            "model": "gpt-image-1",
+            "prompt": data.prompt,
+            "n": 1,
+            "size": "1024x1536",
+            "quality": quality
+        }
+        
+        logger.info(f"OpenAI Image Request: {json.dumps(request_body)}")
+        
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 "https://api.openai.com/v1/images/generations",
@@ -986,30 +1007,50 @@ async def generate_image(data: GenerateImageRequest, request: Request):
                     "Authorization": f"Bearer {openai_key}",
                     "Content-Type": "application/json"
                 },
-                json={
-                    "model": "gpt-image-1",
-                    "prompt": data.prompt,
-                    "n": 1,
-                    "size": "1024x1536",
-                    "quality": quality,
-                    "response_format": "b64_json"
-                }
+                json=request_body
             )
             
+            response_text = response.text
+            logger.info(f"OpenAI Response Status: {response.status_code}")
+            
             if response.status_code != 200:
-                error_detail = response.json().get("error", {}).get("message", "Unknown error")
-                raise HTTPException(status_code=response.status_code, detail=f"OpenAI API error: {error_detail}")
+                try:
+                    error_data = response.json()
+                    error_message = error_data.get("error", {}).get("message", response_text[:500])
+                except Exception:
+                    error_message = response_text[:500]
+                logger.error(f"OpenAI API Error: {error_message}")
+                raise HTTPException(status_code=response.status_code, detail=f"OpenAI API error: {error_message}")
             
             result = response.json()
-            b64_image = result["data"][0]["b64_json"]
             
-            # Decode and save image
-            image_data = base64.b64decode(b64_image)
+            # Get image data - OpenAI returns base64 in data[0].b64_json
+            if "data" not in result or len(result["data"]) == 0:
+                logger.error(f"No image data in response: {response_text[:500]}")
+                raise HTTPException(status_code=500, detail="OpenAI returned no image data")
+            
+            image_item = result["data"][0]
+            
+            # Check for b64_json or url
+            if "b64_json" in image_item:
+                b64_image = image_item["b64_json"]
+                image_data = base64.b64decode(b64_image)
+            elif "url" in image_item:
+                # Download from URL
+                img_response = await client.get(image_item["url"])
+                image_data = img_response.content
+            else:
+                logger.error(f"Unknown image format: {image_item.keys()}")
+                raise HTTPException(status_code=500, detail="Unknown image format in response")
+            
+            # Save image
             image_filename = f"img_{data.imageIndex}.png"
             image_path = project_dir / image_filename
             
             async with aiofiles.open(image_path, 'wb') as f:
                 await f.write(image_data)
+            
+            logger.info(f"Image saved: {image_path}")
             
             # Create URL path for frontend
             image_url = f"/api/projects/{data.projectId}/images/{image_filename}"
@@ -1043,7 +1084,9 @@ async def generate_image(data: GenerateImageRequest, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Image generation failed: {e}")
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Image generation failed: {error_trace}")
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
 # Serve project images
@@ -1561,13 +1604,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # Startup event
 @app.on_event("startup")
