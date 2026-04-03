@@ -1482,8 +1482,11 @@ async def get_project_image(project_id: str, filename: str, request: Request):
     """Serve generated project images"""
     user = await get_current_user(request)
     
-    # Verify project ownership
-    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    # Verify project ownership - handle invalid ObjectId gracefully
+    try:
+        project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    except Exception:
+        raise HTTPException(status_code=404, detail="Project not found")
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
