@@ -1126,7 +1126,8 @@ async def analyze_song(data: AnalyzeSongRequest, request: Request):
                     "messages": [
                         {
                             "role": "system",
-                            "content": """You are a creative director for emotional music videos. Analyze this song deeply.
+                            "content": """You are a creative director for emotional music videos targeting Latin/Spanish-speaking audiences. Analyze this song deeply.
+IMPORTANT: Generate ALL text hooks in SPANISH, matching the language and emotion of the lyrics. If lyrics are in Spanish, hooks MUST be in Spanish. If lyrics are in English, still create hooks in Spanish that capture the emotion.
 Return ONLY valid JSON (no markdown, no code blocks) with exactly this structure:
 {
   "theme": "visual theme description",
@@ -1134,8 +1135,9 @@ Return ONLY valid JSON (no markdown, no code blocks) with exactly this structure
   "animationStyle": "camera movement and animation style description",
   "palette": ["#hex1", "#hex2", "#hex3", "#hex4"],
   "prompts": ["detailed image prompt 1 for 9:16 vertical, cinematic, emotional", "prompt 2", "prompt 3", "prompt 4", "prompt 5"],
-  "hooks": ["short emotional text phrase 1 max 8 words", "phrase 2", "phrase 3"]
-}"""
+  "hooks": ["frase emotiva corta en español max 8 palabras 1", "frase 2", "frase 3", "frase 4", "frase 5", "frase 6", "frase 7"]
+}
+Generate at least 7 hooks. Each hook should be a powerful, emotional short phrase in Spanish (max 8 words) that could appear as text overlay in the video. Draw directly from the lyrics' emotion and story."""
                         },
                         {
                             "role": "user",
@@ -1321,58 +1323,101 @@ async def generate_image(data: GenerateImageRequest, request: Request):
             
             provider_name = "together"
             
-            # Select model based on provider setting
+            # All Together AI FLUX models use the same serverless model
+            model_id = "black-forest-labs/FLUX.1-schnell"
             if image_provider == "together-flux-schnell":
-                model_id = "black-forest-labs/FLUX.1-schnell-Free"
-                cost_per_image = 0.0  # Free tier
+                cost_per_image = 0.003
             elif image_provider == "together-flux-dev":
                 model_id = "black-forest-labs/FLUX.1-dev"
                 cost_per_image = 0.025
             else:
-                model_id = "black-forest-labs/FLUX.1-schnell"
-                cost_per_image = 0.0027
+                cost_per_image = 0.003
             
             logger.info(f"Using Together AI model: {model_id}, cost: ${cost_per_image}")
             
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                # Together AI uses OpenAI-compatible format
-                response = await client.post(
-                    "https://api.together.xyz/v1/images/generations",
-                    headers={
-                        "Authorization": f"Bearer {together_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": model_id,
-                        "prompt": f"{data.prompt}, vertical 9:16 portrait format, cinematic, high quality, detailed",
-                        "n": 1,
-                        "width": 768,
-                        "height": 1344,
-                        "steps": 4,
-                        "response_format": "b64_json"
-                    }
-                )
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    response = await client.post(
+                        "https://api.together.xyz/v1/images/generations",
+                        headers={
+                            "Authorization": f"Bearer {together_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": model_id,
+                            "prompt": f"{data.prompt}, vertical 9:16 portrait format, cinematic, high quality, detailed",
+                            "n": 1,
+                            "width": 768,
+                            "height": 1344,
+                            "steps": 4,
+                            "response_format": "b64_json"
+                        }
+                    )
+                    
+                    logger.info(f"Together AI Response Status: {response.status_code}")
+                    
+                    if response.status_code != 200:
+                        error_text = response.text[:500]
+                        logger.error(f"Together AI Error: {error_text}")
+                        raise Exception(f"Together AI returned {response.status_code}")
+                    
+                    result = response.json()
+                    
+                    if "data" in result and len(result["data"]) > 0:
+                        item = result["data"][0]
+                        if "b64_json" in item:
+                            image_data = base64.b64decode(item["b64_json"])
+                        elif "url" in item:
+                            img_response = await client.get(item["url"])
+                            image_data = img_response.content
+                    
+                    if not image_data:
+                        logger.error("No image in Together AI response")
+                        raise Exception("Together AI returned no image data")
+                        
+            except Exception as together_err:
+                # FALLBACK to OpenAI if Together AI fails
+                logger.warning(f"Together AI failed ({together_err}), falling back to OpenAI gpt-image-mini")
+                openai_key = await get_user_openai_key(user["_id"])
+                if not openai_key:
+                    raise HTTPException(status_code=400, detail="Image generation failed with Together AI and no OpenAI key is configured as fallback. Please check your Together AI key or add an OpenAI key in Settings.")
                 
-                logger.info(f"Together AI Response Status: {response.status_code}")
+                provider_name = "openai (fallback)"
+                cost_per_image = 0.005
                 
-                if response.status_code != 200:
-                    error_text = response.text[:500]
-                    logger.error(f"Together AI Error: {error_text}")
-                    raise HTTPException(status_code=response.status_code, detail=f"Together AI error: {error_text}")
+                request_body = {
+                    "model": "gpt-image-1",
+                    "prompt": data.prompt,
+                    "n": 1,
+                    "size": "1024x1536",
+                    "quality": "low"
+                }
                 
-                result = response.json()
-                
-                if "data" in result and len(result["data"]) > 0:
-                    item = result["data"][0]
-                    if "b64_json" in item:
-                        image_data = base64.b64decode(item["b64_json"])
-                    elif "url" in item:
-                        img_response = await client.get(item["url"])
-                        image_data = img_response.content
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    response = await client.post(
+                        "https://api.openai.com/v1/images/generations",
+                        headers={
+                            "Authorization": f"Bearer {openai_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json=request_body
+                    )
+                    
+                    if response.status_code != 200:
+                        error_detail = response.json().get("error", {}).get("message", "Unknown error")
+                        raise HTTPException(status_code=response.status_code, detail=f"Image generation failed: {error_detail}")
+                    
+                    result = response.json()
+                    if "data" in result and len(result["data"]) > 0:
+                        item = result["data"][0]
+                        if "b64_json" in item:
+                            image_data = base64.b64decode(item["b64_json"])
+                        elif "url" in item:
+                            img_response = await client.get(item["url"])
+                            image_data = img_response.content
                 
                 if not image_data:
-                    logger.error(f"No image in Together AI response: {json.dumps(result)[:500]}")
-                    raise HTTPException(status_code=500, detail="Together AI returned no image data")
+                    raise HTTPException(status_code=500, detail="Image generation failed with both Together AI and OpenAI")
         
         # ===== OPENAI PROVIDER (default) =====
         else:
@@ -1830,6 +1875,7 @@ class AssembleVideoRequest(BaseModel):
     crossfadeDuration: float = 0.5
     addTextOverlay: bool = True
     hookText: Optional[str] = None
+    hookTexts: Optional[List[str]] = None
 
 @api_router.post("/video/assemble")
 async def assemble_video(data: AssembleVideoRequest, request: Request):
@@ -1898,7 +1944,7 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
                 clip_durations.append(float(probe_result.stdout.strip()))
             else:
                 clip_durations.append(5.0)  # default 5s
-        except:
+        except Exception:
             clip_durations.append(5.0)
     
     total_clip_duration = sum(clip_durations) if clip_durations else 5.0
@@ -1952,10 +1998,27 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
         # Add fade in/out
         filter_parts.append("fade=t=in:st=0:d=1,fade=t=out:st=end-1:d=1")
         
-        # Add text overlay if enabled
-        if data.addTextOverlay and data.hookText:
-            safe_text = data.hookText.replace("'", "'\\''").replace(":", "\\:")
-            filter_parts.append(f"drawtext=text='{safe_text}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h-200:shadowcolor=black:shadowx=2:shadowy=2:enable='lt(t,4)'")
+        # Add text overlay if enabled - cycle through all selected hooks
+        hooks_to_show = data.hookTexts or ([data.hookText] if data.hookText else [])
+        hooks_to_show = [h for h in hooks_to_show if h and h.strip()]
+        
+        if data.addTextOverlay and hooks_to_show:
+            if audio_duration > 0:
+                segment_duration = audio_duration / len(hooks_to_show)
+            else:
+                segment_duration = total_clip_duration / len(hooks_to_show) if total_clip_duration > 0 else 5.0
+            
+            for i, hook in enumerate(hooks_to_show):
+                safe_text = hook.replace("'", "'\\''").replace(":", "\\:").replace("%", "\\%")
+                start_t = i * segment_duration
+                end_t = start_t + segment_duration
+                # Show each hook for its segment with fade in/out
+                fade_in = start_t
+                filter_parts.append(
+                    f"drawtext=text='{safe_text}':fontsize=52:fontcolor=white:x=(w-text_w)/2:y=h-220"
+                    f":shadowcolor=black@0.7:shadowx=3:shadowy=3"
+                    f":enable='between(t,{fade_in:.1f},{end_t:.1f})'"
+                )
         
         video_filter = ','.join(filter_parts) if filter_parts else None
         

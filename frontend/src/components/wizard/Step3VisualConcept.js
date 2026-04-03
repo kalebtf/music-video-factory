@@ -127,7 +127,7 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
     const selected = project.concept.selectedHooks || [];
     if (selected.includes(hook)) {
       updateConcept('selectedHooks', selected.filter(h => h !== hook));
-    } else if (selected.length < 2) {
+    } else {
       updateConcept('selectedHooks', [...selected, hook]);
     }
   };
@@ -337,7 +337,9 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
           {project.concept.hooks && project.concept.hooks.length > 0 && (
             <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
               <h3 className="font-heading font-semibold text-[#f8f8f8] mb-2">Text Hooks for Video</h3>
-              <p className="text-sm text-[#8b8b99] mb-4">Select 1-2 hooks to overlay on your video</p>
+              <p className="text-sm text-[#8b8b99] mb-4">
+                Select hooks to overlay on your video — they will cycle throughout the clip
+              </p>
               <div className="flex flex-wrap gap-2">
                 {project.concept.hooks.map((hook, index) => {
                   const isSelected = (project.concept.selectedHooks || []).includes(hook);
@@ -357,6 +359,51 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
                   );
                 })}
               </div>
+              {/* Custom hook input */}
+              <div className="mt-4 flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Add your own hook (Spanish preferred)..."
+                  className="flex-1 bg-[#0c0c0f] border border-[#2a2a35] rounded-lg px-4 py-2 text-sm text-[#f8f8f8] placeholder-[#8b8b99] focus:ring-1 focus:ring-[#e94560] focus:border-[#e94560] transition-all"
+                  data-testid="custom-hook-input"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && e.target.value.trim()) {
+                      const newHook = e.target.value.trim();
+                      const currentHooks = project.concept.hooks || [];
+                      const currentSelected = project.concept.selectedHooks || [];
+                      if (!currentHooks.includes(newHook)) {
+                        updateConcept('hooks', [...currentHooks, newHook]);
+                        updateConcept('selectedHooks', [...currentSelected, newHook]);
+                      }
+                      e.target.value = '';
+                    }
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    const input = document.querySelector('[data-testid="custom-hook-input"]');
+                    if (input && input.value.trim()) {
+                      const newHook = input.value.trim();
+                      const currentHooks = project.concept.hooks || [];
+                      const currentSelected = project.concept.selectedHooks || [];
+                      if (!currentHooks.includes(newHook)) {
+                        updateConcept('hooks', [...currentHooks, newHook]);
+                        updateConcept('selectedHooks', [...currentSelected, newHook]);
+                      }
+                      input.value = '';
+                    }
+                  }}
+                  className="px-4 py-2 bg-[#e94560] text-white rounded-lg text-sm hover:bg-[#f25a74] transition-all"
+                  data-testid="add-custom-hook-button"
+                >
+                  Add
+                </button>
+              </div>
+              {(project.concept.selectedHooks || []).length > 0 && (
+                <p className="text-xs text-[#10b981] mt-3">
+                  {(project.concept.selectedHooks || []).length} hook(s) selected — will appear as text overlay in the final video
+                </p>
+              )}
             </div>
           )}
 

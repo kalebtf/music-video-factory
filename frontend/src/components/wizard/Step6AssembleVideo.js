@@ -39,7 +39,8 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
           clipOrder,
           crossfadeDuration: project.assemblySettings.crossfade,
           addTextOverlay: project.assemblySettings.addTextOverlay,
-          hookText: project.concept.selectedHooks?.[0] || ''
+          hookText: project.concept.selectedHooks?.[0] || '',
+          hookTexts: project.concept.selectedHooks || []
         }
       );
 

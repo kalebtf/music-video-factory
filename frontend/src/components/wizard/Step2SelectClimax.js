@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Waves, Wand2, Play, Pause, Loader2 } from 'lucide-react';
 import api from '../../lib/api';
 
@@ -13,6 +13,25 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
   const [detecting, setDetecting] = useState(false);
   const [detectionMessage, setDetectionMessage] = useState('');
 
+  // Stop playback when it reaches the end marker
+  const checkBounds = useCallback(() => {
+    const ws = wavesurferRef.current;
+    if (!ws || !isPlaying) return;
+    const t = ws.getCurrentTime();
+    setCurrentTime(t);
+    if (t >= project.climaxEnd) {
+      ws.pause();
+      ws.setTime(project.climaxStart);
+      setCurrentTime(project.climaxStart);
+    }
+  }, [isPlaying, project.climaxStart, project.climaxEnd]);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    const iv = setInterval(checkBounds, 80);
+    return () => clearInterval(iv);
+  }, [isPlaying, checkBounds]);
+
   useEffect(() => {
     let cancelled = false;
     let ws = null;
@@ -20,7 +39,6 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     const initWaveSurfer = async () => {
       if (!project.audioUrl || !waveformRef.current) return;
 
-      // Small delay to ensure DOM is ready
       await new Promise(resolve => setTimeout(resolve, 100));
       if (cancelled) return;
 
@@ -30,7 +48,6 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
 
         if (cancelled) return;
 
-        // Destroy previous instance if any
         if (wavesurferRef.current) {
           try { wavesurferRef.current.destroy(); } catch(e) {}
           wavesurferRef.current = null;
@@ -38,13 +55,14 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
 
         ws = WaveSurfer.create({
           container: waveformRef.current,
-          waveColor: '#8b8b99',
+          waveColor: '#4a4a5a',
           progressColor: '#e94560',
           cursorColor: '#f8f8f8',
-          height: 120,
-          barWidth: 2,
+          cursorWidth: 3,
+          height: 140,
+          barWidth: 3,
           barGap: 1,
-          barRadius: 2,
+          barRadius: 3,
           responsive: true,
           normalize: true,
         });
@@ -63,7 +81,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
           const region = regions.addRegion({
             start,
             end,
-            color: 'rgba(233, 69, 96, 0.3)',
+            color: 'rgba(233, 69, 96, 0.25)',
             drag: true,
             resize: true,
           });
@@ -71,8 +89,8 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
 
           region.on('update-end', () => {
             updateProject({
-              climaxStart: region.start,
-              climaxEnd: region.end,
+              climaxStart: Math.round(region.start * 10) / 10,
+              climaxEnd: Math.round(region.end * 10) / 10,
             });
           });
         });
@@ -89,30 +107,31 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
           setCurrentTime(ws.getCurrentTime());
         });
 
-        // Load audio - handle blob URLs (from local import) vs API paths
+        // Load audio
         try {
           if (project.audioUrl.startsWith('blob:') || project.audioUrl.startsWith('data:')) {
-            // Already a local blob URL (from file import), load directly
             if (!cancelled) ws.load(project.audioUrl);
           } else if (project.audioUrl.includes('/api/')) {
-            // API path - fetch with auth header, then create blob URL
             const audioPath = project.audioUrl.replace(/.*\/api\//, '/');
-            const response = await api.get(audioPath, { responseType: 'blob' });
+            const token = localStorage.getItem('access_token');
+            const apiBase = process.env.REACT_APP_BACKEND_URL;
+            const res = await fetch(`${apiBase}/api${audioPath}`, {
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
             if (cancelled) return;
-            const blobUrl = URL.createObjectURL(response.data);
+            const blob = await res.blob();
+            const blobUrl = URL.createObjectURL(blob);
             ws.load(blobUrl);
           } else {
-            // Direct URL, load as-is
             if (!cancelled) ws.load(project.audioUrl);
           }
         } catch(e) {
           console.error('Failed to load audio:', e);
-          // Fallback: try loading directly
           if (!cancelled) {
-            try { ws.load(project.audioUrl); } catch(e2) { console.error('Fallback also failed:', e2); }
+            try { ws.load(project.audioUrl); } catch(e2) {}
           }
         }
-        
+
         wavesurferRef.current = ws;
       } catch (err) {
         if (!cancelled) {
@@ -150,33 +169,38 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
 
   const regionDuration = project.climaxEnd - project.climaxStart;
 
+  // ALWAYS play from climax start, stop at climax end
   const handlePlayPause = () => {
-    if (wavesurferRef.current) {
-      wavesurferRef.current.playPause();
+    const ws = wavesurferRef.current;
+    if (!ws) return;
+
+    if (isPlaying) {
+      ws.pause();
+    } else {
+      ws.setTime(project.climaxStart);
+      setCurrentTime(project.climaxStart);
+      ws.play();
     }
   };
 
   const handleAutoDetect = async () => {
     if (!projectId) return;
-    
+
     setDetecting(true);
     setDetectionMessage('');
-    
+
     try {
-      const { data } = await api.post(
-        `/audio/detect-climax/${projectId}`,
-        {}
-      );
-      
-      updateProject({ 
-        climaxStart: data.start, 
-        climaxEnd: data.end 
+      const { data } = await api.post(`/audio/detect-climax/${projectId}`, {});
+
+      updateProject({
+        climaxStart: data.start,
+        climaxEnd: data.end
       });
-      
+
       if (regionRef.current) {
         regionRef.current.setOptions({ start: data.start, end: data.end });
       }
-      
+
       setDetectionMessage(data.message);
     } catch (err) {
       console.error('Climax detection failed:', err);
@@ -192,6 +216,11 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
       updateProject({ climaxStart: newStart });
       if (regionRef.current) {
         regionRef.current.setOptions({ start: newStart });
+      }
+      // Seek to new start position
+      if (wavesurferRef.current) {
+        wavesurferRef.current.setTime(newStart);
+        setCurrentTime(newStart);
       }
     }
   };
@@ -236,15 +265,16 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
         <div
           ref={waveformRef}
           className="w-full bg-[#0c0c0f] rounded-lg p-4 cursor-pointer"
+          style={{ minHeight: 140 }}
           data-testid="waveform"
         />
 
-        {/* Audio Player Controls - Single Toggle Button */}
-        <div className="flex items-center justify-center mt-4">
+        {/* Playback controls */}
+        <div className="flex items-center justify-center gap-4 mt-5">
           <button
             onClick={handlePlayPause}
             disabled={!isReady}
-            className="flex items-center gap-2 px-6 py-3 bg-[#e94560] text-white rounded-full hover:bg-[#f25a74] transition-all disabled:opacity-50"
+            className="flex items-center gap-2 px-8 py-3 bg-[#e94560] text-white rounded-full hover:bg-[#f25a74] transition-all disabled:opacity-50 text-base font-medium"
             data-testid="play-pause-button"
           >
             {isPlaying ? (
@@ -255,20 +285,22 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
             ) : (
               <>
                 <Play className="w-5 h-5" fill="white" />
-                Play
+                Play Selection
               </>
             )}
           </button>
         </div>
 
-        {/* Current Time Display */}
+        {/* Current playback position */}
         <div className="text-center mt-3 text-sm text-[#8b8b99]">
-          Playing: <span className="text-[#f8f8f8] font-mono">{formatTime(currentTime)}</span> / <span className="font-mono">{formatTime(duration)}</span>
+          Playback: <span className="text-[#f8f8f8] font-mono">{formatTime(currentTime)}</span>
+          <span className="mx-2 text-[#2a2a35]">|</span>
+          Total: <span className="font-mono">{formatTime(duration)}</span>
         </div>
 
-        {/* Time Display & Manual Input */}
+        {/* Start / End / Duration inputs */}
         <div className="grid grid-cols-3 gap-4 mt-6">
-          <div className="bg-[#0c0c0f] px-4 py-3 rounded-lg border border-[#2a2a35]">
+          <div className="bg-[#0c0c0f] px-4 py-3 rounded-lg border border-[#2a2a35] group focus-within:border-[#e94560] transition-all">
             <label className="text-[#8b8b99] text-xs block mb-1">Start</label>
             <input
               type="text"
@@ -279,7 +311,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
               data-testid="climax-start-input"
             />
           </div>
-          <div className="bg-[#0c0c0f] px-4 py-3 rounded-lg border border-[#2a2a35]">
+          <div className="bg-[#0c0c0f] px-4 py-3 rounded-lg border border-[#2a2a35] group focus-within:border-[#e94560] transition-all">
             <label className="text-[#8b8b99] text-xs block mb-1">End</label>
             <input
               type="text"
@@ -308,7 +340,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
         )}
       </div>
 
-      {/* Auto-detect Button */}
+      {/* Auto-detect */}
       <div className="flex flex-col items-center gap-2">
         <button
           onClick={handleAutoDetect}
@@ -339,10 +371,10 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
       <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-4">
         <h4 className="font-medium text-[#f8f8f8] mb-2">How to use:</h4>
         <ul className="text-sm text-[#8b8b99] space-y-1">
-          <li>• Click anywhere on the waveform to jump to that position</li>
+          <li>• <strong>Play Selection</strong> plays from Start and stops at End</li>
           <li>• Drag the highlighted region to move the selection</li>
           <li>• Drag the edges to resize the selection</li>
-          <li>• Type exact start/end times manually (format: m:ss)</li>
+          <li>• Type exact start/end times (format: m:ss) — playback jumps immediately</li>
           <li>• Use "Auto-detect" to find the most energetic 40-second section</li>
         </ul>
       </div>

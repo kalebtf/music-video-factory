@@ -101,7 +101,13 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
         totalCost += data.cost;
       } catch (err) {
         console.error(`Failed to generate image ${i}:`, err);
-        const errorMsg = err.response?.data?.detail || 'Image generation failed';
+        let errorMsg = 'Image generation failed. Please try again.';
+        const detail = err.response?.data?.detail;
+        if (typeof detail === 'string') {
+          if (detail.includes('API key')) errorMsg = detail;
+          else if (detail.includes('fallback')) errorMsg = detail;
+          else errorMsg = detail.replace(/\d{3}:?\s?/, '').trim() || errorMsg;
+        }
         
         // Update image to show error state
         updateProject(prev => {
@@ -196,7 +202,12 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
       setFeedbackText({ ...feedbackText, [imageId]: '' });
     } catch (err) {
       console.error('Regeneration failed:', err);
-      setError(err.response?.data?.detail || 'Regeneration failed. Please try again.');
+      const detail = err.response?.data?.detail;
+      let msg = 'Regeneration failed. Please try again.';
+      if (typeof detail === 'string') {
+        msg = detail.replace(/\d{3}:?\s?/, '').trim() || msg;
+      }
+      setError(msg);
     } finally {
       setRegeneratingIndex(null);
     }

@@ -1,17 +1,18 @@
 import React, { useRef, useState } from 'react';
-import { Music, Upload, FileText, Image as ImageIcon, X, FolderOpen, Loader2, Sparkles, Settings2 } from 'lucide-react';
+import { Music, Upload, FileText, Image as ImageIcon, X, FolderOpen, Loader2, Sparkles, Settings2, Check } from 'lucide-react';
 import api from '../../lib/api';
 
 export default function Step1SongInput({ project, updateProject, templates }) {
   const audioInputRef = useRef(null);
   const imagesInputRef = useRef(null);
   const infoInputRef = useRef(null);
-  const folderInputRef = useRef(null);
+  const packageInputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState('');
   const [showImportOptions, setShowImportOptions] = useState(false);
-  
+  const [importedFiles, setImportedFiles] = useState([]);
+
   // AI import options
   const [aiOptions, setAiOptions] = useState({
     parseTitle: true,
@@ -127,9 +128,17 @@ export default function Step1SongInput({ project, updateProject, templates }) {
   const handleFolderImport = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+    await processImportedFiles(files);
+  };
+
+  // Process files from drag-drop or file picker
+  const processImportedFiles = async (files) => {
+    if (files.length === 0) return;
     setImporting(true);
     setImportStatus('Reading files...');
-    const updates = {};
+
+    // Categorize files and build the file list
+    const fileList = [];
     let textContent = '';
     const imageFiles = [];
     let audioFile = null;
@@ -137,10 +146,23 @@ export default function Step1SongInput({ project, updateProject, templates }) {
     for (const file of files) {
       const name = file.name.toLowerCase();
       if (name.startsWith('.') || name === 'thumbs.db' || name === 'desktop.ini') continue;
-      if (name.endsWith('.txt')) textContent = await file.text();
-      else if (name.endsWith('.mp3') || name.endsWith('.wav')) audioFile = file;
-      else if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')) imageFiles.push(file);
+
+      if (name.endsWith('.txt')) {
+        textContent = await file.text();
+        fileList.push({ name: file.name, type: 'text', size: file.size, status: 'done' });
+      } else if (name.endsWith('.mp3') || name.endsWith('.wav')) {
+        audioFile = file;
+        fileList.push({ name: file.name, type: 'audio', size: file.size, status: 'done' });
+      } else if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')) {
+        imageFiles.push(file);
+        fileList.push({ name: file.name, type: 'image', size: file.size, status: 'done' });
+      } else {
+        fileList.push({ name: file.name, type: 'unknown', size: file.size, status: 'skipped' });
+      }
     }
+
+    setImportedFiles(fileList);
+    const updates = {};
 
     if (textContent) {
       let parsed = null;
@@ -273,25 +295,84 @@ export default function Step1SongInput({ project, updateProject, templates }) {
           </div>
         )}
 
-        {/* Import Buttons */}
-        <div className="flex gap-2">
-          <input ref={folderInputRef} type="file" webkitdirectory="" directory="" multiple onChange={handleFolderImport} className="hidden" />
-          <button onClick={() => folderInputRef.current?.click()} disabled={importing}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm bg-[#e94560] text-white rounded-lg hover:bg-[#f25a74] transition-all disabled:opacity-50">
-            {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderOpen className="w-4 h-4" />}
-            Import Song Package
-          </button>
-          <input ref={infoInputRef} type="file" accept=".txt" onChange={handleInfoFileUpload} className="hidden" />
-          <button onClick={() => infoInputRef.current?.click()} disabled={importing}
-            className="flex items-center gap-2 px-3 py-3 text-sm text-[#8b8b99] hover:text-[#f8f8f8] hover:bg-[#0c0c0f] rounded-lg transition-all border border-[#2a2a35] disabled:opacity-50">
-            <FileText className="w-4 h-4" />.txt only
-          </button>
+        {/* Import Buttons + Drag-Drop Zone */}
+        <div
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+          onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); }}
+          onDrop={async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setDragOver(false);
+            const files = Array.from(e.dataTransfer.files || []);
+            await processImportedFiles(files);
+          }}
+          className={`border-2 border-dashed rounded-xl p-6 transition-all cursor-pointer ${
+            dragOver ? 'border-[#e94560] bg-[#e94560]/5' : 'border-[#2a2a35] hover:border-[#8b8b99]'
+          }`}
+          data-testid="import-drop-zone"
+        >
+          <div className="flex flex-col items-center gap-3 text-center">
+            <Upload className={`w-8 h-8 ${dragOver ? 'text-[#e94560]' : 'text-[#8b8b99]'}`} />
+            <div>
+              <p className="text-[#f8f8f8] font-medium">Drag & drop your song package here</p>
+              <p className="text-xs text-[#8b8b99] mt-1">
+                Drop all files at once: .txt (lyrics/info), .mp3/.wav (audio), .png/.jpg (images)
+              </p>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <input ref={packageInputRef} type="file" multiple accept=".txt,.mp3,.wav,.png,.jpg,.jpeg,.webp" onChange={(e) => processImportedFiles(Array.from(e.target.files || []))} className="hidden" />
+              <button
+                onClick={(e) => { e.stopPropagation(); packageInputRef.current?.click(); }}
+                disabled={importing}
+                className="flex items-center gap-2 px-5 py-2.5 text-sm bg-[#e94560] text-white rounded-lg hover:bg-[#f25a74] transition-all disabled:opacity-50"
+                data-testid="import-browse-button"
+              >
+                {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderOpen className="w-4 h-4" />}
+                Browse Files
+              </button>
+              <input ref={infoInputRef} type="file" accept=".txt" onChange={handleInfoFileUpload} className="hidden" />
+              <button
+                onClick={(e) => { e.stopPropagation(); infoInputRef.current?.click(); }}
+                disabled={importing}
+                className="flex items-center gap-2 px-3 py-2.5 text-sm text-[#8b8b99] hover:text-[#f8f8f8] rounded-lg transition-all border border-[#2a2a35] disabled:opacity-50"
+              >
+                <FileText className="w-4 h-4" />.txt only
+              </button>
+            </div>
+          </div>
         </div>
 
-        {importStatus && (
-          <div className="mt-3 bg-[#0c0c0f] rounded-lg px-4 py-3 flex items-center gap-3">
-            {importing && <Loader2 className="w-4 h-4 text-[#e94560] animate-spin flex-shrink-0" />}
-            <span className={`text-sm ${importing ? 'text-[#f59e0b]' : 'text-[#10b981]'}`}>{importStatus}</span>
+        {/* Import progress + file list */}
+        {(importStatus || importedFiles.length > 0) && (
+          <div className="mt-3 bg-[#0c0c0f] rounded-lg px-4 py-3 space-y-2">
+            {importing && (
+              <div className="flex items-center gap-3">
+                <Loader2 className="w-4 h-4 text-[#e94560] animate-spin flex-shrink-0" />
+                <span className="text-sm text-[#f59e0b]">{importStatus}</span>
+              </div>
+            )}
+            {!importing && importStatus && (
+              <div className="flex items-center gap-3">
+                <Check className="w-4 h-4 text-[#10b981] flex-shrink-0" />
+                <span className="text-sm text-[#10b981]">{importStatus}</span>
+              </div>
+            )}
+            {importedFiles.length > 0 && (
+              <div className="space-y-1 mt-1">
+                {importedFiles.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    {f.type === 'audio' && <Music className="w-3 h-3 text-[#e94560]" />}
+                    {f.type === 'text' && <FileText className="w-3 h-3 text-[#60a5fa]" />}
+                    {f.type === 'image' && <ImageIcon className="w-3 h-3 text-[#f59e0b]" />}
+                    {f.type === 'unknown' && <X className="w-3 h-3 text-[#8b8b99]" />}
+                    <span className={f.status === 'skipped' ? 'text-[#8b8b99] line-through' : 'text-[#f8f8f8]'}>
+                      {f.name}
+                    </span>
+                    <span className="text-[#8b8b99] ml-auto">{(f.size / 1024).toFixed(0)} KB</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
