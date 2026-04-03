@@ -5,105 +5,84 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - Tech: React + FastAPI (Python) + MongoDB
 - Design: Dark theme (#0c0c0f bg, #141418 cards, #e94560 accent)
 
-## User Personas
-1. **Content Creator**: Wants to quickly create music videos for TikTok/Shorts with AI-generated visuals
-2. **Music Artist**: Needs professional-looking music videos without video production skills
+## Core Requirements
+- 7-step wizard: Song Input → Climax → Concept → Images → Animate → Assemble → Export
+- Multi-provider image generation (OpenAI, Together AI FLUX, Gemini)
+- FAL.AI Wan 2.6 video animation
+- FFmpeg video assembly with text overlay and clip looping
+- JWT auth + AES-encrypted API key storage
+- User-provided API keys (OpenAI, Together AI, Gemini, FAL.AI)
 
 ## What's Been Implemented
 
-### Phase 1 - Foundation
-- [x] JWT Authentication (localStorage + Bearer token)
-- [x] Dashboard with stats
-- [x] Settings with encrypted API key storage (AES)
+### Phase 1 - Foundation (Done)
+- [x] JWT Auth (localStorage + Bearer token)
+- [x] Dashboard with stats, project grid, hover actions (Edit/Delete), video preview modal
+- [x] Settings: 4 API key providers, Test Keys button, image/video provider selection
 - [x] 6 default templates
+- [x] Centralized axios instance with interceptors (`/app/frontend/src/lib/api.js`)
 
-### Phase 2 - Wizard UI
-- [x] 7-step video creation wizard
-- [x] Progress bar with step navigation
+### Phase 2 - Wizard UI (Done)
+- [x] 7-step wizard with progress bar
+- [x] Step 1: Drag-drop import zone (replaces browser popup), Smart Import with AI parsing
+- [x] Step 2: Waveform, play from start/stop at end, editable time inputs, auto-detect
+- [x] Step 3: AI concept analysis, unlimited hook selection, custom hook input, Spanish hooks
+- [x] Step 4: Image generation with AuthImage display, approve/reject, regenerate, friendly errors
+- [x] Step 5: FAL.AI animation with polling, AuthVideo display
+- [x] Step 6: Drag-to-reorder, assembly with all selected hooks as cycling text overlay
+- [x] Step 7: Platform downloads (TikTok/Shorts/Reels) + ZIP
 
-### Phase 3 - Real AI Integrations
-- [x] Audio upload with duration detection
-- [x] GPT-4o-mini song analysis
-- [x] GPT Image 1 generation ($0.005/img)
+### Phase 3 - Real AI Integrations (Done)
+- [x] OpenAI GPT-4o-mini song analysis (Spanish hooks, ≥7 hooks)
+- [x] Multi-provider image gen: Together AI FLUX.1-schnell, OpenAI GPT Image 1, Gemini Imagen
+- [x] Auto-fallback: Together AI → OpenAI if FLUX fails
+- [x] FAL.AI Wan 2.6 image-to-video animation
+- [x] FFmpeg video assembly with clip looping and multi-hook text overlay
 
-### Phase 4 - Bug Fixes & Video Features (March 31, 2026)
-**Bug Fixes:**
-- [x] Auto-detect climax: Added pydub fallback when librosa fails
-- [x] API key auth: Fixed endpoints to properly read encrypted keys from database
-- [x] Single Play/Pause: Replaced 3 buttons with one toggle button
-
-**New Features:**
-- [x] FAL.AI video animation (Wan model)
-- [x] Real video assembly with FFmpeg
-- [x] Real file downloads (platform-specific + ZIP)
-
-### Phase 5 - Auth Architecture Fix (Feb 2026)
-- [x] Moved from cookie-based auth to localStorage + Authorization Bearer header
-- [x] Created centralized axios instance (`/app/frontend/src/lib/api.js`) with request/response interceptors
-- [x] All frontend files use centralized api instance (no raw axios)
-- [x] Backend returns access_token and refresh_token in login/register response body
-- [x] Token refresh supports Authorization header (not just cookies)
-- [x] Added GET /api/auth/test-keys endpoint for key validation
-- [x] Added "Test Keys" button in Settings page
-- [x] Added debug logging on all authenticated endpoints
-- [x] 401 response interceptor redirects to login page
-
-## API Endpoints
-### Auth
-- POST /api/auth/register - Register (returns tokens)
-- POST /api/auth/login - Login (returns tokens)
-- POST /api/auth/logout - Logout
-- GET /api/auth/me - Get current user
-- POST /api/auth/refresh - Refresh token (supports Bearer header)
-- GET /api/auth/test-keys - Test which API keys are configured
-
-### Settings
-- GET /api/settings - Get user settings
-- POST /api/settings/api-key - Save API key
-- GET /api/settings/api-keys - Get key status
-- POST /api/settings/providers - Update providers
-
-### Projects
-- GET /api/projects - List projects
-- POST /api/projects - Create project
-- GET /api/projects/{id} - Get project
-- PUT /api/projects/{id} - Update project
-- DELETE /api/projects/{id} - Delete project
-
-### Audio
-- POST /api/audio/upload/{id} - Upload audio
-- POST /api/audio/detect-climax/{id} - Auto-detect climax
-- POST /api/audio/extract-climax/{id} - Extract climax segment
-
-### AI
-- POST /api/ai/analyze-song - GPT-4o-mini analysis
-- POST /api/ai/generate-image - GPT Image 1 generation
-- POST /api/ai/animate-image - FAL.AI Wan animation
-- GET /api/ai/animation-status/{id} - Poll animation
-
-### Video
-- POST /api/video/assemble - FFmpeg assembly
-- GET /api/projects/{id}/final/{file} - Serve final video
-- GET /api/projects/{id}/download/{platform} - Platform download
-- GET /api/projects/{id}/download-zip - ZIP download
+### Phase 4 - Bug Fixes (Done)
+- [x] Auth: cookie-based → localStorage + Bearer token (all files)
+- [x] FLUX model: -Free → -schnell (serverless), with OpenAI fallback
+- [x] AuthImage/AuthVideo: fetch() instead of axios for blob requests (no XHR error)
+- [x] Step4: updateProject supports function args (images display correctly)
+- [x] Video assembly: clips loop sequentially until audio is covered
+- [x] Friendly error messages (no raw 400/axios text)
 
 ## Architecture
-- Frontend: `/app/frontend/src/lib/api.js` - centralized axios with Bearer token interceptors
-- Frontend: `/app/frontend/src/contexts/AuthContext.js` - stores tokens in localStorage
-- Backend: `/app/backend/server.py` - monolithic FastAPI with all routes (~1660 lines)
-- Auth: JWT access tokens (15min) + refresh tokens (7 days) via localStorage
+```
+/app/
+├── backend/
+│   ├── .env (MONGO_URL, DB_NAME, JWT_SECRET, AES_KEY)
+│   └── server.py (~2200 lines, monolithic)
+├── frontend/
+│   ├── .env (REACT_APP_BACKEND_URL)
+│   └── src/
+│       ├── lib/api.js (centralized axios + Bearer token)
+│       ├── contexts/AuthContext.js (localStorage tokens)
+│       ├── components/
+│       │   ├── AuthImage.js (AuthImage + AuthVideo using fetch())
+│       │   └── wizard/Step1-Step7
+│       └── pages/Login, Register, Dashboard, Settings, NewVideo
+```
+
+## API Endpoints
+- Auth: /api/auth/register, /login, /logout, /me, /refresh, /test-keys
+- Settings: /api/settings, /settings/api-key, /settings/api-keys, /settings/providers
+- Projects: /api/projects (CRUD), /projects/{id}/concept, /images, /clips
+- Audio: /api/audio/upload/{id}, /detect-climax/{id}, /extract-climax/{id}
+- AI: /api/ai/analyze-song, /generate-image, /animate-image, /animation-status/{id}, /parse-song-info
+- Video: /api/video/assemble, /projects/{id}/final/{file}, /download/{platform}, /download-zip
 
 ## Cost Structure
-- GPT-4o-mini analysis: $0.01 per song
-- GPT Image 1 Mini: $0.005 per image
-- FAL.AI Wan animation: $0.25 per clip (estimated)
+- GPT-4o-mini analysis: $0.01/song
+- Together AI FLUX Schnell: $0.003/image
+- OpenAI GPT Image 1 Mini: $0.005/image (fallback)
+- FAL.AI Wan animation: ~$0.25/clip
 
 ## Test Credentials
-- Email: test@example.com
-- Password: test123456
+- Email: test@example.com | Password: test123456
 
-## Next Tasks
-- [ ] User end-to-end verification of full flow
-- [ ] Kling Direct integration option (P1, deferred)
-- [ ] Batch processing for multiple videos (P2, deferred)
+## Next Tasks / Backlog
+- [ ] User end-to-end verification of full flow with real API keys
+- [ ] Kling Direct video integration (P1, deferred)
+- [ ] Batch processing (P2, deferred)
 - [ ] Refactor server.py into modular routers (P3, deferred)

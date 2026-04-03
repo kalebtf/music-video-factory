@@ -292,7 +292,6 @@ export default function Settings() {
           >
             {[
               { value: 'together-flux-schnell', label: 'FLUX Schnell', price: '$0.003/img', desc: 'Together AI', tag: 'Best value' },
-              { value: 'together-flux', label: 'FLUX Schnell', price: '$0.003/img', desc: 'Together AI' },
               { value: 'gpt-image-mini', label: 'GPT Image Mini', price: '$0.005/img', desc: 'OpenAI' },
               { value: 'imagen-4-fast', label: 'Imagen 4 Fast', price: '$0.02/img', desc: 'Google' },
               { value: 'gemini-flash', label: 'Nano Banana', price: '$0.039/img', desc: 'Google Gemini' },
