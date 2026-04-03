@@ -5,6 +5,15 @@ import { AuthImage } from '../AuthImage';
 
 const PLACEHOLDER_COLORS = ['#e94560', '#0f3460', '#f0a500', '#16213e', '#53d769', '#8b5cf6', '#00b4d8', '#ff6b35'];
 
+const CHARACTER_MODES = [
+  { id: 'visible', promptPrefix: 'with clearly visible characters facing the camera' },
+  { id: 'none', promptPrefix: 'with no people or characters, focus on environment and abstract visuals' },
+  { id: 'far', promptPrefix: 'with distant small silhouette figures far away in the landscape' },
+  { id: 'blurred', promptPrefix: 'with blurred obscured human silhouettes, out of focus, mysterious' },
+  { id: 'behind', promptPrefix: 'with characters seen from behind, face hidden, mysterious atmosphere' },
+  { id: 'environment', promptPrefix: 'with only landscapes, objects, and atmospheric environments, no humans' },
+];
+
 export default function Step4GenerateImages({ project, updateProject, projectId }) {
   const [generating, setGenerating] = useState(false);
   const [generatingIndex, setGeneratingIndex] = useState(null);
@@ -13,6 +22,62 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Auto-import images from Step 1 uploadedImages into project.images
+  useEffect(() => {
+    const importStep1Images = async () => {
+      if (!projectId || project.uploadedImages.length === 0) return;
+
+      // Find Step 1 images not yet in project.images
+      const existingIds = new Set(project.images.map(img => img.id));
+      const toImport = project.uploadedImages.filter(img => !existingIds.has(img.id));
+      if (toImport.length === 0) return;
+
+      for (const img of toImport) {
+        try {
+          // If it has a File object, upload to server
+          if (img.file) {
+            const formData = new FormData();
+            formData.append('file', img.file);
+            const { data } = await api.post(
+              `/projects/${projectId}/upload-image`,
+              formData,
+              { headers: { 'Content-Type': 'multipart/form-data' } }
+            );
+            const fullUrl = `${process.env.REACT_APP_BACKEND_URL}${data.imageUrl}`;
+            const serverImage = {
+              id: img.id,
+              url: fullUrl,
+              imagePath: data.imagePath || '',
+              prompt: `Uploaded: ${img.file.name}`,
+              status: 'approved',
+              cost: 0,
+              isUploaded: true,
+              isReference: false,
+            };
+            updateProject(prev => ({ images: [...prev.images, serverImage] }));
+          } else if (img.url) {
+            // Already has a URL (e.g. loaded from DB)
+            const serverImage = {
+              id: img.id,
+              url: img.url,
+              imagePath: img.imagePath || '',
+              prompt: img.prompt || 'Uploaded image',
+              status: img.status || 'approved',
+              cost: 0,
+              isUploaded: true,
+              isReference: false,
+            };
+            updateProject(prev => ({ images: [...prev.images, serverImage] }));
+          }
+        } catch (err) {
+          console.error('Failed to import Step 1 image:', err);
+        }
+      }
+    };
+
+    importStep1Images();
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleUploadImages = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -118,7 +183,10 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
       try {
         const fullPrompt = prompts[i]
           + (project.concept.customInstructions ? `, ${project.concept.customInstructions}` : '')
-          + refSuffix;
+          + refSuffix
+          + (project.concept.characterMode && project.concept.characterMode !== 'visible'
+            ? `, ${CHARACTER_MODES.find(m => m.id === project.concept.characterMode)?.promptPrefix || ''}`
+            : '');
 
         const { data } = await api.post('/ai/generate-image', {
           projectId,
@@ -196,7 +264,12 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
     try {
       const { data } = await api.post('/ai/generate-image', {
         projectId,
-        prompt: newPrompt + (project.concept.customInstructions ? `, ${project.concept.customInstructions}` : '') + refSuffix,
+        prompt: newPrompt
+          + (project.concept.customInstructions ? `, ${project.concept.customInstructions}` : '')
+          + refSuffix
+          + (project.concept.characterMode && project.concept.characterMode !== 'visible'
+            ? `, ${CHARACTER_MODES.find(m => m.id === project.concept.characterMode)?.promptPrefix || ''}`
+            : ''),
         imageIndex: index
       });
 
@@ -308,12 +381,46 @@ export default function Step4GenerateImages({ project, updateProject, projectId 
         </div>
       )}
 
-      {/* Status Counter */}
+      {/* Status Counter + Bulk Actions */}
       {project.images.length > 0 && (
-        <div className="flex items-center justify-center gap-6 py-3">
-          <span className="text-[#10b981] text-sm"><Check className="w-3 h-3 inline mr-1" />{approved} approved</span>
-          <span className="text-[#8b8b99] text-sm">{pending} pending</span>
-          {generatingCount > 0 && <span className="text-[#f59e0b] text-sm"><Loader2 className="w-3 h-3 inline mr-1 animate-spin" />{generatingCount} generating</span>}
+        <div className="flex flex-col items-center gap-3 py-3">
+          <div className="flex items-center gap-6">
+            <span className="text-[#10b981] text-sm"><Check className="w-3 h-3 inline mr-1" />{approved} approved</span>
+            <span className="text-[#8b8b99] text-sm">{pending} pending</span>
+            {generatingCount > 0 && <span className="text-[#f59e0b] text-sm"><Loader2 className="w-3 h-3 inline mr-1 animate-spin" />{generatingCount} generating</span>}
+          </div>
+          {pending > 0 && (
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  updateProject({
+                    images: project.images.map(img =>
+                      img.status === 'pending' ? { ...img, status: 'approved' } : img
+                    )
+                  });
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-[#10b981] text-white rounded-lg hover:bg-[#059669] transition-all text-sm"
+                data-testid="approve-all-images"
+              >
+                <Check className="w-4 h-4" />
+                Approve All ({pending})
+              </button>
+              <button
+                onClick={() => {
+                  updateProject({
+                    images: project.images.map(img =>
+                      img.status === 'pending' ? { ...img, status: 'rejected' } : img
+                    )
+                  });
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-[#ef4444] text-white rounded-lg hover:bg-[#dc2626] transition-all text-sm"
+                data-testid="reject-all-images"
+              >
+                <X className="w-4 h-4" />
+                Reject All ({pending})
+              </button>
+            </div>
+          )}
         </div>
       )}
 

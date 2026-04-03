@@ -20,7 +20,7 @@ export default function Settings() {
   const [apiKeyInputs, setApiKeyInputs] = useState({ openai: '', falai: '', kling: '', gemini: '', together: '' });
   const [showKeys, setShowKeys] = useState({ openai: false, falai: false, kling: false, gemini: false, together: false });
   const [savingKey, setSavingKey] = useState('');
-  const [settings, setSettings] = useState({ imageProvider: 'gpt-image-mini', videoProvider: 'falai-wan' });
+  const [settings, setSettings] = useState({ imageProvider: 'together-flux-dev', videoProvider: 'falai-wan' });
   const [costLogs, setCostLogs] = useState([]);
   const [totalCost, setTotalCost] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -291,11 +291,12 @@ export default function Settings() {
             className="space-y-3"
           >
             {[
-              { value: 'together-flux-schnell', label: 'FLUX Schnell', price: '$0.003/img', desc: 'Together AI', tag: 'Best value' },
+              { value: 'together-flux-dev', label: 'FLUX Dev', price: '$0.025/img', desc: 'Together AI', tag: 'Recommended — cinematic' },
+              { value: 'together-flux-schnell', label: 'FLUX Schnell', price: '$0.003/img', desc: 'Together AI', tag: 'Cheapest' },
               { value: 'gpt-image-mini', label: 'GPT Image Mini', price: '$0.005/img', desc: 'OpenAI' },
               { value: 'imagen-4-fast', label: 'Imagen 4 Fast', price: '$0.02/img', desc: 'Google' },
               { value: 'gemini-flash', label: 'Nano Banana', price: '$0.039/img', desc: 'Google Gemini' },
-              { value: 'gpt-image-1.5', label: 'GPT Image 1.5', price: '$0.04/img', desc: 'OpenAI', tag: 'Best quality' },
+              { value: 'gpt-image-1.5', label: 'GPT Image 1.5', price: '$0.04/img', desc: 'OpenAI', tag: 'Highest quality' },
             ].map(({ value, label, price, desc, tag }) => (
               <div
                 key={value}

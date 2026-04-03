@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Play, Check, CheckCheck, RefreshCw, Loader2, AlertCircle, Zap } from 'lucide-react';
+import { Play, Check, CheckCheck, X, RefreshCw, Loader2, AlertCircle, Zap } from 'lucide-react';
 import api from '../../lib/api';
 import { AuthImage, AuthVideo } from '../AuthImage';
 
@@ -196,6 +196,16 @@ export default function Step5AnimateClips({ project, updateProject, projectId })
     });
   };
 
+  const handleRejectAll = () => {
+    const pendingClips = project.clips.filter(c => c.status === 'pending');
+    if (pendingClips.length === 0) return;
+    updateProject({
+      clips: project.clips.map(clip =>
+        clip.status === 'pending' ? { ...clip, status: 'rejected' } : clip
+      )
+    });
+  };
+
   const handleReAnimate = (imageId, index) => {
     updateProject({
       clips: project.clips.filter(c => c.imageId !== imageId)
@@ -253,15 +263,25 @@ export default function Step5AnimateClips({ project, updateProject, projectId })
           </button>
         )}
         {pendingClips.length > 0 && (
-          <button
-            onClick={handleApproveAll}
-            disabled={batchAnimating}
-            className="flex items-center gap-2 px-5 py-2.5 bg-[#10b981] text-white rounded-lg hover:bg-[#059669] transition-all disabled:opacity-50 text-sm font-medium"
-            data-testid="approve-all-button"
-          >
-            <CheckCheck className="w-4 h-4" />
-            Approve All ({pendingClips.length})
-          </button>
+          <>
+            <button
+              onClick={handleApproveAll}
+              disabled={batchAnimating}
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#10b981] text-white rounded-lg hover:bg-[#059669] transition-all disabled:opacity-50 text-sm font-medium"
+              data-testid="approve-all-clips"
+            >
+              <CheckCheck className="w-4 h-4" />
+              Approve All ({pendingClips.length})
+            </button>
+            <button
+              onClick={handleRejectAll}
+              disabled={batchAnimating}
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#ef4444] text-white rounded-lg hover:bg-[#dc2626] transition-all disabled:opacity-50 text-sm font-medium"
+              data-testid="reject-all-clips"
+            >
+              Reject All ({pendingClips.length})
+            </button>
+          </>
         )}
         {batchAnimating && (
           <button

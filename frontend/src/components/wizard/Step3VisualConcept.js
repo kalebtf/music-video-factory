@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Palette, Wand2, Plus, Trash2, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
+import { Palette, Wand2, Plus, Trash2, RefreshCw, Loader2, AlertCircle, Users, Eye, EyeOff, Mountain } from 'lucide-react';
 import api from '../../lib/api';
+
+const CHARACTER_MODES = [
+  { id: 'visible', label: 'Real visible characters', icon: Users, description: 'Characters shown clearly, facing camera', promptPrefix: 'with clearly visible characters facing the camera' },
+  { id: 'none', label: 'No characters', icon: EyeOff, description: 'Abstract, environment only', promptPrefix: 'with no people or characters, focus on environment and abstract visuals' },
+  { id: 'far', label: 'Far away / small', icon: Mountain, description: 'Characters small in frame', promptPrefix: 'with distant small silhouette figures far away in the landscape' },
+  { id: 'blurred', label: 'Blurred / obscured', icon: Eye, description: 'Characters out of focus', promptPrefix: 'with blurred obscured human silhouettes, out of focus, mysterious' },
+  { id: 'behind', label: 'From behind / hidden', icon: Users, description: 'Face never shown', promptPrefix: 'with characters seen from behind, face hidden, mysterious atmosphere' },
+  { id: 'environment', label: 'Environment only', icon: Mountain, description: 'Landscapes, objects, no humans', promptPrefix: 'with only landscapes, objects, and atmospheric environments, no humans' },
+];
 
 export default function Step3VisualConcept({ project, updateProject, projectId }) {
   const [analyzing, setAnalyzing] = useState(false);
@@ -224,6 +233,43 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
               <p className="text-xs text-[#8b8b99] mt-1">
                 How images should animate and feel (e.g., slow zoom, gentle drift)
               </p>
+            </div>
+          </div>
+
+          {/* Color Palette */}
+          <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <Users className="w-5 h-5 text-[#e94560]" />
+              <h3 className="font-heading font-semibold text-[#f8f8f8]">Character Presence</h3>
+            </div>
+            <p className="text-xs text-[#8b8b99] mb-4">
+              How should characters appear in the generated images? This affects all AI image prompts.
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {CHARACTER_MODES.map((mode) => {
+                const isSelected = (project.concept.characterMode || 'visible') === mode.id;
+                const Icon = mode.icon;
+                return (
+                  <button
+                    key={mode.id}
+                    onClick={() => updateConcept('characterMode', mode.id)}
+                    className={`flex flex-col items-start gap-2 p-4 rounded-lg border text-left transition-all ${
+                      isSelected
+                        ? 'border-[#e94560] bg-[#e94560]/10'
+                        : 'border-[#2a2a35] hover:border-[#8b8b99] bg-[#0c0c0f]'
+                    }`}
+                    data-testid={`character-mode-${mode.id}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Icon className={`w-4 h-4 ${isSelected ? 'text-[#e94560]' : 'text-[#8b8b99]'}`} />
+                      <span className={`text-sm font-medium ${isSelected ? 'text-[#f8f8f8]' : 'text-[#8b8b99]'}`}>
+                        {mode.label}
+                      </span>
+                    </div>
+                    <span className="text-xs text-[#8b8b99]">{mode.description}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 

@@ -268,7 +268,7 @@ async def register(request: RegisterRequest, response: Response):
         "email": email,
         "password_hash": hashed,
         "apiKeys": {"openai": "", "falai": "", "kling": "", "gemini": "", "together": ""},
-        "settings": {"imageProvider": "gpt-image-mini", "videoProvider": "falai-wan"},
+        "settings": {"imageProvider": "together-flux-dev", "videoProvider": "falai-wan"},
         "createdAt": datetime.now(timezone.utc).isoformat()
     }
     result = await db.users.insert_one(user_doc)
@@ -1127,17 +1127,23 @@ async def analyze_song(data: AnalyzeSongRequest, request: Request):
                         {
                             "role": "system",
                             "content": """You are a creative director for emotional music videos targeting Latin/Spanish-speaking audiences. Analyze this song deeply.
-IMPORTANT: Generate ALL text hooks in SPANISH, matching the language and emotion of the lyrics. If lyrics are in Spanish, hooks MUST be in Spanish. If lyrics are in English, still create hooks in Spanish that capture the emotion.
+
+LANGUAGE RULES (STRICT):
+- "hooks": MUST be written in SPANISH. These are short emotional phrases for text overlay. If lyrics are in Spanish, draw from them. If lyrics are in English, translate the emotion into Spanish.
+- "theme", "mood", "animationStyle": MUST be written in ENGLISH. These guide AI image generation models that work best with English prompts.
+- "prompts": MUST be written in ENGLISH. These are detailed image generation prompts that will be sent to AI models (FLUX, DALL-E). English is required for optimal results.
+
 Return ONLY valid JSON (no markdown, no code blocks) with exactly this structure:
 {
-  "theme": "visual theme description",
-  "mood": "overall mood and feeling",
-  "animationStyle": "camera movement and animation style description",
+  "theme": "English description of the visual theme",
+  "mood": "English description of overall mood and feeling",
+  "animationStyle": "English description of camera movement and animation style",
   "palette": ["#hex1", "#hex2", "#hex3", "#hex4"],
-  "prompts": ["detailed image prompt 1 for 9:16 vertical, cinematic, emotional", "prompt 2", "prompt 3", "prompt 4", "prompt 5"],
+  "prompts": ["detailed English image prompt 1 for 9:16 vertical, cinematic, emotional", "prompt 2", "prompt 3", "prompt 4", "prompt 5"],
   "hooks": ["frase emotiva corta en español max 8 palabras 1", "frase 2", "frase 3", "frase 4", "frase 5", "frase 6", "frase 7"]
 }
-Generate at least 7 hooks. Each hook should be a powerful, emotional short phrase in Spanish (max 8 words) that could appear as text overlay in the video. Draw directly from the lyrics' emotion and story."""
+Generate at least 7 hooks. Each hook should be a powerful, emotional short phrase in SPANISH (max 8 words) that could appear as text overlay in the video. Draw directly from the lyrics' emotion and story.
+All image prompts must be in ENGLISH for AI model compatibility — describe scenes, lighting, composition, mood in English."""
                         },
                         {
                             "role": "user",
@@ -1325,11 +1331,14 @@ async def generate_image(data: GenerateImageRequest, request: Request):
             
             # All Together AI FLUX models use the same serverless model
             model_id = "black-forest-labs/FLUX.1-schnell"
+            steps = 4
             if image_provider == "together-flux-schnell":
                 cost_per_image = 0.003
+                steps = 4
             elif image_provider == "together-flux-dev":
                 model_id = "black-forest-labs/FLUX.1-dev"
                 cost_per_image = 0.025
+                steps = 28
             else:
                 cost_per_image = 0.003
             
@@ -1349,7 +1358,7 @@ async def generate_image(data: GenerateImageRequest, request: Request):
                             "n": 1,
                             "width": 768,
                             "height": 1344,
-                            "steps": 4,
+                            "steps": steps,
                             "response_format": "b64_json"
                         }
                     )
@@ -1910,8 +1919,13 @@ async def get_project_clip(project_id: str, filename: str, request: Request):
     return FileResponse(clip_path, media_type="video/mp4")
 
 # ========================================
-# VIDEO ASSEMBLY ENDPOINTS
+# VIDEO ASSEMBLY ENDPOINTS (Background Job)
 # ========================================
+
+# In-memory job store for assembly tasks
+assembly_jobs: Dict[str, Dict[str, Any]] = {}
+
+MAX_SUBTITLE_LINES = 15
 
 class AssembleVideoRequest(BaseModel):
     projectId: str
@@ -1923,87 +1937,70 @@ class AssembleVideoRequest(BaseModel):
     addSubtitles: bool = False
     lyrics: Optional[str] = None
 
-@api_router.post("/video/assemble")
-async def assemble_video(data: AssembleVideoRequest, request: Request):
-    """Assemble final video from clips using FFmpeg"""
-    user = await get_current_user(request)
-    logger.info(f"[VIDEO] assemble called by {user.get('email')} for project: {data.projectId}")
-    
-    project = await db.projects.find_one({"_id": ObjectId(data.projectId), "userId": user["_id"]})
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    clips_dir = PROJECTS_DIR / data.projectId / "clips"
-    final_dir = PROJECTS_DIR / data.projectId / "final"
-    final_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Get clip paths in order
-    clip_paths = []
-    for idx in data.clipOrder:
-        clip_path = clips_dir / f"clip_{idx}.mp4"
-        logger.info(f"Looking for clip at: {clip_path} (exists: {clip_path.exists()})")
-        if clip_path.exists():
-            clip_paths.append(str(clip_path))
-    
-    logger.info(f"Found {len(clip_paths)} clips out of {len(data.clipOrder)} requested")
-    
-    if len(clip_paths) < 1:
-        raise HTTPException(status_code=400, detail="Need at least 1 clip to assemble video")
-    
-    # Get audio path - fix stored paths that may have /app/projects prefix
-    audio_path_raw = project.get("audioClimaxPath") or project.get("audioOriginalPath")
-    audio_path = None
-    if audio_path_raw:
-        audio_path_obj = Path(audio_path_raw)
-        if audio_path_obj.exists():
-            audio_path = str(audio_path_obj)
-        else:
-            # Try to resolve relative to PROJECTS_DIR
-            clean_path = str(audio_path_raw).replace("/app/projects/", "").replace("\\app\\projects\\", "")
-            resolved = PROJECTS_DIR / clean_path
-            if resolved.exists():
-                audio_path = str(resolved)
-            else:
-                logger.warning(f"Audio file not found: {audio_path_raw} (also tried {resolved})")
-    
-    # Get audio duration to know how long to loop clips
-    audio_duration = 0
-    if audio_path:
-        try:
-            probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', 
-                        '-of', 'default=noprint_wrappers=1:nokey=1', audio_path]
-            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
-            if probe_result.returncode == 0 and probe_result.stdout.strip():
-                audio_duration = float(probe_result.stdout.strip())
-                logger.info(f"Audio duration: {audio_duration}s")
-        except Exception as e:
-            logger.error(f"Failed to get audio duration: {e}")
-    
-    # Get each clip's duration
-    clip_durations = []
-    for cp in clip_paths:
-        try:
-            probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-                        '-of', 'default=noprint_wrappers=1:nokey=1', cp]
-            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
-            if probe_result.returncode == 0 and probe_result.stdout.strip():
-                clip_durations.append(float(probe_result.stdout.strip()))
-            else:
-                clip_durations.append(5.0)  # default 5s
-        except Exception:
-            clip_durations.append(5.0)
-    
-    total_clip_duration = sum(clip_durations) if clip_durations else 5.0
-    logger.info(f"Total clip duration: {total_clip_duration}s, Audio duration: {audio_duration}s")
-    
-    output_path = final_dir / "video.mp4"
-    
+async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, project: dict):
+    """Background task: runs FFmpeg assembly and updates job status."""
+    job = assembly_jobs[job_id]
     try:
-        # Create concat file with clips looped to cover audio duration
+        clips_dir = PROJECTS_DIR / data.projectId / "clips"
+        final_dir = PROJECTS_DIR / data.projectId / "final"
+        final_dir.mkdir(parents=True, exist_ok=True)
+
+        clip_paths = []
+        for idx in data.clipOrder:
+            clip_path = clips_dir / f"clip_{idx}.mp4"
+            if clip_path.exists():
+                clip_paths.append(str(clip_path))
+
+        if len(clip_paths) < 1:
+            job.update({"status": "failed", "error": "No valid clips found on disk"})
+            return
+
+        job["message"] = "Reading audio..."
+
+        audio_path_raw = project.get("audioClimaxPath") or project.get("audioOriginalPath")
+        audio_path = None
+        if audio_path_raw:
+            audio_path_obj = Path(audio_path_raw)
+            if audio_path_obj.exists():
+                audio_path = str(audio_path_obj)
+            else:
+                clean_path = str(audio_path_raw).replace("/app/projects/", "").replace("\\app\\projects\\", "")
+                resolved = PROJECTS_DIR / clean_path
+                if resolved.exists():
+                    audio_path = str(resolved)
+
+        audio_duration = 0
+        if audio_path:
+            try:
+                probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                            '-of', 'default=noprint_wrappers=1:nokey=1', audio_path]
+                probe_result = await asyncio.to_thread(subprocess.run, probe_cmd, capture_output=True, text=True)
+                if probe_result.returncode == 0 and probe_result.stdout.strip():
+                    audio_duration = float(probe_result.stdout.strip())
+            except Exception as e:
+                logger.error(f"Failed to get audio duration: {e}")
+
+        clip_durations = []
+        for cp in clip_paths:
+            try:
+                probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                            '-of', 'default=noprint_wrappers=1:nokey=1', cp]
+                probe_result = await asyncio.to_thread(subprocess.run, probe_cmd, capture_output=True, text=True)
+                if probe_result.returncode == 0 and probe_result.stdout.strip():
+                    clip_durations.append(float(probe_result.stdout.strip()))
+                else:
+                    clip_durations.append(5.0)
+            except Exception:
+                clip_durations.append(5.0)
+
+        total_clip_duration = sum(clip_durations) if clip_durations else 5.0
+        output_path = final_dir / "video.mp4"
+
+        job["message"] = "Concatenating clips..."
+
         concat_file = final_dir / "concat.txt"
         async with aiofiles.open(concat_file, 'w') as f:
             if audio_duration > 0 and total_clip_duration < audio_duration:
-                # Loop clips until we cover the full audio duration
                 accumulated = 0
                 clip_index = 0
                 loop_count = 0
@@ -2014,55 +2011,42 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
                     accumulated += dur
                     clip_index += 1
                     loop_count += 1
-                    if loop_count > 200:  # safety limit
+                    if loop_count > 200:
                         break
-                logger.info(f"Looped {loop_count} clips to cover {audio_duration}s (accumulated: {accumulated}s)")
             else:
-                # No audio or clips are longer - just concat once
                 for path in clip_paths:
                     await f.write(f"file '{path}'\n")
-        
-        # Build FFmpeg command
-        # First concat clips
+
         concat_output = final_dir / "concat_temp.mp4"
         concat_cmd = [
-            'ffmpeg', '-y',
-            '-f', 'concat',
-            '-safe', '0',
-            '-i', str(concat_file),
-            '-c', 'copy',
-            str(concat_output)
+            'ffmpeg', '-y', '-f', 'concat', '-safe', '0',
+            '-i', str(concat_file), '-c', 'copy', str(concat_output)
         ]
-        
-        result = subprocess.run(concat_cmd, capture_output=True, text=True)
+        result = await asyncio.to_thread(subprocess.run, concat_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.error(f"FFmpeg concat error: {result.stderr}")
-        
+
+        job["message"] = "Adding overlays and encoding..."
+
         # Build filter for text overlay (hooks + subtitles)
         filter_parts = []
-        
-        # Add fade in/out
         if audio_duration > 0:
             filter_parts.append("fade=t=in:st=0:d=1")
             fade_out_start = max(0, audio_duration - 1)
             filter_parts.append(f"fade=t=out:st={fade_out_start:.1f}:d=1")
         else:
             filter_parts.append("fade=t=in:st=0:d=1")
-        
-        # Hook text overlays — cycle through all selected hooks
+
         hooks_to_show = data.hookTexts or ([data.hookText] if data.hookText else [])
         hooks_to_show = [h for h in hooks_to_show if h and h.strip()]
-        
         effective_duration = audio_duration if audio_duration > 0 else total_clip_duration
-        
+
         if data.addTextOverlay and hooks_to_show and effective_duration > 0:
             segment_duration = effective_duration / len(hooks_to_show)
-            
             for i, hook in enumerate(hooks_to_show):
                 safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
                 start_t = i * segment_duration
                 end_t = start_t + segment_duration
-                
                 filter_parts.append(
                     f"drawtext=text='{safe_hook}'"
                     f":fontsize=56:fontcolor=white"
@@ -2070,21 +2054,28 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
                     f":shadowcolor=black@0.8:shadowx=4:shadowy=4"
                     f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
                 )
-            logger.info(f"Added {len(hooks_to_show)} hook overlays cycling over {effective_duration:.1f}s")
-        
-        # Subtitle overlays (MVP: equal segmentation across clip duration)
+
+        # Subtitle overlays — cap at MAX_SUBTITLE_LINES to prevent filter overload
+        subtitles_capped = False
+        original_subtitle_count = 0
         if data.addSubtitles and data.lyrics and effective_duration > 0:
             raw_lines = [ln.strip() for ln in data.lyrics.split('\n') if ln.strip()]
             subtitle_lines = [ln for ln in raw_lines if not (ln.startswith('[') and ln.endswith(']'))]
-            
+            original_subtitle_count = len(subtitle_lines)
+
+            if len(subtitle_lines) > MAX_SUBTITLE_LINES:
+                subtitles_capped = True
+                # Evenly sample lines to keep timing coherent
+                step = len(subtitle_lines) / MAX_SUBTITLE_LINES
+                subtitle_lines = [subtitle_lines[int(i * step)] for i in range(MAX_SUBTITLE_LINES)]
+                logger.info(f"Capped subtitles from {original_subtitle_count} to {MAX_SUBTITLE_LINES} lines")
+
             if subtitle_lines:
                 sub_segment = effective_duration / len(subtitle_lines)
-                
                 for i, line in enumerate(subtitle_lines):
                     safe_line = line.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
                     sub_start = i * sub_segment
                     sub_end = sub_start + sub_segment
-                    
                     filter_parts.append(
                         f"drawtext=text='{safe_line}'"
                         f":fontsize=36:fontcolor=white@0.95"
@@ -2093,45 +2084,38 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
                         f":borderw=2:bordercolor=black@0.5"
                         f":enable='between(t\\,{sub_start:.2f}\\,{sub_end:.2f})'"
                     )
-                logger.info(f"Added {len(subtitle_lines)} subtitle segments over {effective_duration:.1f}s")
-        
+
         video_filter = ','.join(filter_parts) if filter_parts else 'null'
-        logger.info(f"Video filter: {video_filter[:500]}...")
-        
-        # Final assembly with audio — use filter_complex for proper escaping
+        logger.info(f"Video filter ({len(filter_parts)} parts): {video_filter[:300]}...")
+
+        # Use fast preset to speed up encoding
         final_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
-        
         if audio_path and Path(audio_path).exists():
             final_cmd.extend(['-i', audio_path])
-        
         final_cmd.extend([
             '-filter_complex', f'[0:v]{video_filter}[vout]',
             '-map', '[vout]',
         ])
-        
         if audio_path and Path(audio_path).exists():
             final_cmd.extend(['-map', '1:a', '-c:a', 'aac', '-b:a', '128k', '-shortest'])
         else:
             final_cmd.extend(['-an'])
-        
         final_cmd.extend([
-            '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
             '-r', '30', '-s', '1080x1920',
             str(output_path)
         ])
-        
-        logger.info(f"Running FFmpeg final cmd: {' '.join(str(c) for c in final_cmd[:15])}...")
-        result = subprocess.run(final_cmd, capture_output=True, text=True)
-        
+
+        logger.info(f"Running FFmpeg final cmd (background job {job_id})...")
+        result = await asyncio.to_thread(subprocess.run, final_cmd, capture_output=True, text=True)
+
         if result.returncode != 0:
             logger.error(f"FFmpeg assembly error: {result.stderr[:1000]}")
-            
-            # Fallback: try with just fades, no text
-            logger.info("Trying fallback without text overlays...")
+            job["message"] = "Primary render failed, trying fallback..."
+
             fallback_filter = 'fade=t=in:st=0:d=1'
             if audio_duration > 0:
                 fallback_filter += f',fade=t=out:st={max(0, audio_duration - 1):.1f}:d=1'
-            
             fallback_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
             if audio_path and Path(audio_path).exists():
                 fallback_cmd.extend(['-i', audio_path])
@@ -2141,52 +2125,114 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
             else:
                 fallback_cmd.extend(['-an'])
             fallback_cmd.append(str(output_path))
-            
-            fallback_result = subprocess.run(fallback_cmd, capture_output=True, text=True)
+            fallback_result = await asyncio.to_thread(subprocess.run, fallback_cmd, capture_output=True, text=True)
             if fallback_result.returncode != 0:
                 logger.error(f"Fallback also failed: {fallback_result.stderr[:500]}")
                 simple_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
                 if audio_path and Path(audio_path).exists():
                     simple_cmd.extend(['-i', audio_path, '-shortest'])
                 simple_cmd.extend(['-c:v', 'libx264', '-c:a', 'aac', str(output_path)])
-                subprocess.run(simple_cmd, capture_output=True)
-        
+                await asyncio.to_thread(subprocess.run, simple_cmd, capture_output=True)
+
         # Clean up temp files
-        if concat_output.exists():
-            concat_output.unlink()
-        if concat_file.exists():
-            concat_file.unlink()
-        
+        for tmp in [concat_output, concat_file]:
+            if tmp.exists():
+                tmp.unlink()
+
         # Get video info
         duration = 0
         file_size = 0
         if output_path.exists():
-            file_size = output_path.stat().st_size / (1024 * 1024)  # MB
+            file_size = output_path.stat().st_size / (1024 * 1024)
             probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', str(output_path)]
-            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            probe_result = await asyncio.to_thread(subprocess.run, probe_cmd, capture_output=True, text=True)
             if probe_result.returncode == 0:
                 probe_data = json.loads(probe_result.stdout)
                 duration = float(probe_data.get('format', {}).get('duration', 0))
-        
-        # Update project
+
         await db.projects.update_one(
             {"_id": ObjectId(data.projectId)},
-            {"$set": {
-                "finalVideoPath": str(output_path),
-                "status": "done"
-            }}
+            {"$set": {"finalVideoPath": str(output_path), "status": "done"}}
         )
-        
-        return {
-            "success": True,
+
+        job.update({
+            "status": "completed",
+            "message": "Video assembled successfully",
             "videoUrl": f"/api/projects/{data.projectId}/final/video.mp4",
             "duration": round(duration, 2),
-            "fileSize": round(file_size, 2)
-        }
-        
+            "fileSize": round(file_size, 2),
+            "subtitlesCapped": subtitles_capped,
+            "originalSubtitleCount": original_subtitle_count,
+            "usedSubtitleCount": min(original_subtitle_count, MAX_SUBTITLE_LINES) if subtitles_capped else original_subtitle_count,
+        })
+        logger.info(f"Assembly job {job_id} completed successfully")
+
     except Exception as e:
-        logger.error(f"Video assembly failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Video assembly failed: {str(e)}")
+        logger.error(f"Assembly job {job_id} failed: {e}")
+        job.update({"status": "failed", "error": str(e), "message": f"Assembly failed: {str(e)}"})
+
+
+@api_router.post("/video/assemble")
+async def assemble_video(data: AssembleVideoRequest, request: Request):
+    """Start video assembly as a background job. Returns job ID for polling."""
+    user = await get_current_user(request)
+    logger.info(f"[VIDEO] assemble called by {user.get('email')} for project: {data.projectId}")
+
+    project = await db.projects.find_one({"_id": ObjectId(data.projectId), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Quick validation before starting background job
+    clips_dir = PROJECTS_DIR / data.projectId / "clips"
+    clip_count = sum(1 for idx in data.clipOrder if (clips_dir / f"clip_{idx}.mp4").exists())
+    if clip_count < 1:
+        raise HTTPException(status_code=400, detail="Need at least 1 clip to assemble video")
+
+    job_id = str(uuid.uuid4())
+    assembly_jobs[job_id] = {
+        "status": "processing",
+        "message": "Starting assembly...",
+        "projectId": data.projectId,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+    asyncio.create_task(_run_assembly(job_id, data, user["_id"], project))
+
+    return {"jobId": job_id, "status": "processing", "message": "Assembly started"}
+
+
+@api_router.get("/video/assemble/{job_id}/status")
+async def get_assembly_status(job_id: str, request: Request):
+    """Poll for assembly job status."""
+    await get_current_user(request)
+
+    job = assembly_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Assembly job not found")
+
+    response = {
+        "jobId": job_id,
+        "status": job["status"],
+        "message": job.get("message", ""),
+    }
+
+    if job["status"] == "completed":
+        response.update({
+            "success": True,
+            "videoUrl": job.get("videoUrl"),
+            "duration": job.get("duration"),
+            "fileSize": job.get("fileSize"),
+            "subtitlesCapped": job.get("subtitlesCapped", False),
+            "originalSubtitleCount": job.get("originalSubtitleCount", 0),
+            "usedSubtitleCount": job.get("usedSubtitleCount", 0),
+        })
+        # Clean up job after successful retrieval
+        del assembly_jobs[job_id]
+    elif job["status"] == "failed":
+        response["error"] = job.get("error", "Unknown error")
+        del assembly_jobs[job_id]
+
+    return response
 
 # Serve final video
 @api_router.get("/projects/{project_id}/final/{filename}")
