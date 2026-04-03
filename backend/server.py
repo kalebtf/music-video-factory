@@ -1521,6 +1521,50 @@ async def generate_image(data: GenerateImageRequest, request: Request):
         logger.error(f"Image generation failed: {error_trace}")
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
+# Upload user images to a project
+@api_router.post("/projects/{project_id}/upload-image")
+async def upload_project_image(project_id: str, request: Request, file: UploadFile = File(...)):
+    """Upload a user's own image to the project"""
+    user = await get_current_user(request)
+    logger.info(f"[IMAGES] upload-image called by {user.get('email')} for project: {project_id}")
+    
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Validate file type
+    allowed_types = ['image/png', 'image/jpeg', 'image/webp', 'image/jpg']
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Only PNG, JPEG, and WebP images are allowed")
+    
+    images_dir = PROJECTS_DIR / project_id / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Find next available upload index
+    existing = list(images_dir.glob("upload_*.png")) + list(images_dir.glob("upload_*.jpg")) + list(images_dir.glob("upload_*.webp"))
+    upload_index = len(existing)
+    
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else 'png'
+    if ext not in ['png', 'jpg', 'jpeg', 'webp']:
+        ext = 'png'
+    
+    filename = f"upload_{upload_index}.{ext}"
+    image_path = images_dir / filename
+    
+    contents = await file.read()
+    async with aiofiles.open(image_path, 'wb') as f:
+        await f.write(contents)
+    
+    image_url = f"/api/projects/{project_id}/images/{filename}"
+    logger.info(f"User image uploaded: {image_path}")
+    
+    return {
+        "success": True,
+        "imageUrl": image_url,
+        "imagePath": str(image_path),
+        "filename": filename
+    }
+
 # Serve project images
 @api_router.get("/projects/{project_id}/images/{filename}")
 async def get_project_image(project_id: str, filename: str, request: Request):
@@ -1876,6 +1920,8 @@ class AssembleVideoRequest(BaseModel):
     addTextOverlay: bool = True
     hookText: Optional[str] = None
     hookTexts: Optional[List[str]] = None
+    addSubtitles: bool = False
+    lyrics: Optional[str] = None
 
 @api_router.post("/video/assemble")
 async def assemble_video(data: AssembleVideoRequest, request: Request):
@@ -1992,71 +2038,118 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
         if result.returncode != 0:
             logger.error(f"FFmpeg concat error: {result.stderr}")
         
-        # Build filter for crossfades, text overlay, and audio
+        # Build filter for text overlay (hooks + subtitles)
         filter_parts = []
         
         # Add fade in/out
-        filter_parts.append("fade=t=in:st=0:d=1,fade=t=out:st=end-1:d=1")
+        if audio_duration > 0:
+            filter_parts.append("fade=t=in:st=0:d=1")
+            fade_out_start = max(0, audio_duration - 1)
+            filter_parts.append(f"fade=t=out:st={fade_out_start:.1f}:d=1")
+        else:
+            filter_parts.append("fade=t=in:st=0:d=1")
         
-        # Add text overlay if enabled - cycle through all selected hooks
+        # Hook text overlays — cycle through all selected hooks
         hooks_to_show = data.hookTexts or ([data.hookText] if data.hookText else [])
         hooks_to_show = [h for h in hooks_to_show if h and h.strip()]
         
-        if data.addTextOverlay and hooks_to_show:
-            if audio_duration > 0:
-                segment_duration = audio_duration / len(hooks_to_show)
-            else:
-                segment_duration = total_clip_duration / len(hooks_to_show) if total_clip_duration > 0 else 5.0
+        effective_duration = audio_duration if audio_duration > 0 else total_clip_duration
+        
+        if data.addTextOverlay and hooks_to_show and effective_duration > 0:
+            segment_duration = effective_duration / len(hooks_to_show)
             
             for i, hook in enumerate(hooks_to_show):
-                safe_text = hook.replace("'", "'\\''").replace(":", "\\:").replace("%", "\\%")
+                safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
                 start_t = i * segment_duration
                 end_t = start_t + segment_duration
-                # Show each hook for its segment with fade in/out
-                fade_in = start_t
+                
                 filter_parts.append(
-                    f"drawtext=text='{safe_text}':fontsize=52:fontcolor=white:x=(w-text_w)/2:y=h-220"
-                    f":shadowcolor=black@0.7:shadowx=3:shadowy=3"
-                    f":enable='between(t,{fade_in:.1f},{end_t:.1f})'"
+                    f"drawtext=text='{safe_hook}'"
+                    f":fontsize=56:fontcolor=white"
+                    f":x=(w-text_w)/2:y=h*0.35"
+                    f":shadowcolor=black@0.8:shadowx=4:shadowy=4"
+                    f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
                 )
+            logger.info(f"Added {len(hooks_to_show)} hook overlays cycling over {effective_duration:.1f}s")
         
-        video_filter = ','.join(filter_parts) if filter_parts else None
+        # Subtitle overlays (MVP: equal segmentation across clip duration)
+        if data.addSubtitles and data.lyrics and effective_duration > 0:
+            raw_lines = [ln.strip() for ln in data.lyrics.split('\n') if ln.strip()]
+            subtitle_lines = [ln for ln in raw_lines if not (ln.startswith('[') and ln.endswith(']'))]
+            
+            if subtitle_lines:
+                sub_segment = effective_duration / len(subtitle_lines)
+                
+                for i, line in enumerate(subtitle_lines):
+                    safe_line = line.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
+                    sub_start = i * sub_segment
+                    sub_end = sub_start + sub_segment
+                    
+                    filter_parts.append(
+                        f"drawtext=text='{safe_line}'"
+                        f":fontsize=36:fontcolor=white@0.95"
+                        f":x=(w-text_w)/2:y=h-180"
+                        f":shadowcolor=black@0.9:shadowx=3:shadowy=3"
+                        f":borderw=2:bordercolor=black@0.5"
+                        f":enable='between(t\\,{sub_start:.2f}\\,{sub_end:.2f})'"
+                    )
+                logger.info(f"Added {len(subtitle_lines)} subtitle segments over {effective_duration:.1f}s")
         
-        # Final assembly with audio
+        video_filter = ','.join(filter_parts) if filter_parts else 'null'
+        logger.info(f"Video filter: {video_filter[:500]}...")
+        
+        # Final assembly with audio — use filter_complex for proper escaping
         final_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
         
         if audio_path and Path(audio_path).exists():
             final_cmd.extend(['-i', audio_path])
         
         final_cmd.extend([
-            '-vf', video_filter if video_filter else 'null',
-            '-c:v', 'libx264',
-            '-preset', 'medium',
-            '-crf', '23',
-            '-r', '30',
-            '-s', '1080x1920'
+            '-filter_complex', f'[0:v]{video_filter}[vout]',
+            '-map', '[vout]',
         ])
         
         if audio_path and Path(audio_path).exists():
-            final_cmd.extend([
-                '-c:a', 'aac',
-                '-b:a', '128k',
-                '-shortest'
-            ])
+            final_cmd.extend(['-map', '1:a', '-c:a', 'aac', '-b:a', '128k', '-shortest'])
         else:
             final_cmd.extend(['-an'])
         
-        final_cmd.append(str(output_path))
+        final_cmd.extend([
+            '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+            '-r', '30', '-s', '1080x1920',
+            str(output_path)
+        ])
         
+        logger.info(f"Running FFmpeg final cmd: {' '.join(str(c) for c in final_cmd[:15])}...")
         result = subprocess.run(final_cmd, capture_output=True, text=True)
+        
         if result.returncode != 0:
-            logger.error(f"FFmpeg assembly error: {result.stderr}")
-            # Try simpler command without filters
-            simple_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
+            logger.error(f"FFmpeg assembly error: {result.stderr[:1000]}")
+            
+            # Fallback: try with just fades, no text
+            logger.info("Trying fallback without text overlays...")
+            fallback_filter = 'fade=t=in:st=0:d=1'
+            if audio_duration > 0:
+                fallback_filter += f',fade=t=out:st={max(0, audio_duration - 1):.1f}:d=1'
+            
+            fallback_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
             if audio_path and Path(audio_path).exists():
-                simple_cmd.extend(['-i', audio_path, '-shortest'])
-            simple_cmd.extend(['-c:v', 'libx264', '-c:a', 'aac', str(output_path)])
-            subprocess.run(simple_cmd, capture_output=True)
+                fallback_cmd.extend(['-i', audio_path])
+            fallback_cmd.extend(['-vf', fallback_filter, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-r', '30', '-s', '1080x1920'])
+            if audio_path and Path(audio_path).exists():
+                fallback_cmd.extend(['-c:a', 'aac', '-b:a', '128k', '-shortest'])
+            else:
+                fallback_cmd.extend(['-an'])
+            fallback_cmd.append(str(output_path))
+            
+            fallback_result = subprocess.run(fallback_cmd, capture_output=True, text=True)
+            if fallback_result.returncode != 0:
+                logger.error(f"Fallback also failed: {fallback_result.stderr[:500]}")
+                simple_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
+                if audio_path and Path(audio_path).exists():
+                    simple_cmd.extend(['-i', audio_path, '-shortest'])
+                simple_cmd.extend(['-c:v', 'libx264', '-c:a', 'aac', str(output_path)])
+                subprocess.run(simple_cmd, capture_output=True)
         
         # Clean up temp files
         if concat_output.exists():

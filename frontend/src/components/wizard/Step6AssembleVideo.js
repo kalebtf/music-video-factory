@@ -40,7 +40,9 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
           crossfadeDuration: project.assemblySettings.crossfade,
           addTextOverlay: project.assemblySettings.addTextOverlay,
           hookText: project.concept.selectedHooks?.[0] || '',
-          hookTexts: project.concept.selectedHooks || []
+          hookTexts: project.concept.selectedHooks || [],
+          addSubtitles: project.assemblySettings.addSubtitles || false,
+          lyrics: project.lyrics || ''
         }
       );
 
@@ -166,16 +168,21 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
         {/* Text Overlay Toggle */}
         <div className="flex items-center justify-between">
           <div>
-            <span className="text-[#f8f8f8]">Add text overlay</span>
+            <span className="text-[#f8f8f8]">Add text overlay (hooks)</span>
             {project.assemblySettings.addTextOverlay && project.concept.selectedHooks?.length > 0 && (
-              <p className="text-sm text-[#8b8b99] mt-1">
-                "{project.concept.selectedHooks[0]}"
-              </p>
+              <div className="mt-1 space-y-0.5">
+                {project.concept.selectedHooks.map((hook, i) => (
+                  <p key={i} className="text-xs text-[#8b8b99]">"{hook}"</p>
+                ))}
+                <p className="text-[10px] text-[#e94560]">
+                  {project.concept.selectedHooks.length} hook(s) will cycle throughout the video
+                </p>
+              </div>
             )}
           </div>
           <button
             onClick={() => updateSettings('addTextOverlay', !project.assemblySettings.addTextOverlay)}
-            className={`w-12 h-6 rounded-full transition-all ${
+            className={`w-12 h-6 rounded-full transition-all flex-shrink-0 ${
               project.assemblySettings.addTextOverlay ? 'bg-[#e94560]' : 'bg-[#2a2a35]'
             }`}
             data-testid="toggle-text-overlay"
@@ -210,10 +217,24 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
 
         {/* Subtitles Toggle */}
         <div className="flex items-center justify-between">
-          <span className="text-[#f8f8f8]">Add subtitles from lyrics</span>
+          <div>
+            <span className="text-[#f8f8f8]">Add subtitles from lyrics</span>
+            {project.assemblySettings.addSubtitles && (
+              <div className="mt-1">
+                {project.lyrics ? (
+                  <p className="text-xs text-[#8b8b99]">
+                    {project.lyrics.split('\n').filter(l => l.trim() && !(l.trim().startsWith('[') && l.trim().endsWith(']'))).length} lines
+                    — evenly timed across the clip segment
+                  </p>
+                ) : (
+                  <p className="text-xs text-[#f59e0b]">No lyrics found — add lyrics in Step 1</p>
+                )}
+              </div>
+            )}
+          </div>
           <button
             onClick={() => updateSettings('addSubtitles', !project.assemblySettings.addSubtitles)}
-            className={`w-12 h-6 rounded-full transition-all ${
+            className={`w-12 h-6 rounded-full transition-all flex-shrink-0 ${
               project.assemblySettings.addSubtitles ? 'bg-[#e94560]' : 'bg-[#2a2a35]'
             }`}
             data-testid="toggle-subtitles"
