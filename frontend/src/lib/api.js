@@ -38,8 +38,17 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
+    // Safely get status code - blob responseType can cause InvalidStateError
+    let statusCode;
+    try {
+      statusCode = error.response?.status;
+    } catch (e) {
+      // InvalidStateError when responseType is 'blob' - just reject
+      return Promise.reject(error);
+    }
+
     // If 401 and not already retrying
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (statusCode === 401 && !originalRequest._retry) {
       // Don't try to refresh if the failing request IS the refresh or login/register
       const url = originalRequest.url || '';
       if (url.includes('/auth/refresh') || url.includes('/auth/login') || url.includes('/auth/register')) {

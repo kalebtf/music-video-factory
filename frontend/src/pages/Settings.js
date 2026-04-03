@@ -16,9 +16,9 @@ import { Label } from '../components/ui/label';
 
 export default function Settings() {
   const { refreshUser } = useAuth();
-  const [apiKeys, setApiKeys] = useState({ openai: false, falai: false, kling: false });
-  const [apiKeyInputs, setApiKeyInputs] = useState({ openai: '', falai: '', kling: '' });
-  const [showKeys, setShowKeys] = useState({ openai: false, falai: false, kling: false });
+  const [apiKeys, setApiKeys] = useState({ openai: false, falai: false, kling: false, gemini: false, together: false });
+  const [apiKeyInputs, setApiKeyInputs] = useState({ openai: '', falai: '', kling: '', gemini: '', together: '' });
+  const [showKeys, setShowKeys] = useState({ openai: false, falai: false, kling: false, gemini: false, together: false });
   const [savingKey, setSavingKey] = useState('');
   const [settings, setSettings] = useState({ imageProvider: 'gpt-image-mini', videoProvider: 'falai-wan' });
   const [costLogs, setCostLogs] = useState([]);
@@ -135,13 +135,17 @@ export default function Settings() {
           </h2>
           <div className="space-y-4">
             {[
-              { key: 'openai', label: 'OpenAI API Key' },
-              { key: 'falai', label: 'FAL.AI API Key' },
-              { key: 'kling', label: 'Kling API Key' }
-            ].map(({ key, label }) => (
+              { key: 'openai', label: 'OpenAI API Key', hint: 'For images & song analysis' },
+              { key: 'together', label: 'Together AI API Key', hint: 'Cheapest images (FLUX)' },
+              { key: 'gemini', label: 'Google Gemini API Key', hint: 'Free 500 imgs/day in AI Studio' },
+              { key: 'falai', label: 'FAL.AI API Key', hint: 'For video animation' },
+            ].map(({ key, label, hint }) => (
               <div key={key} className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-sm text-[#8b8b99]">{label}</label>
+                  <div>
+                    <label className="text-sm text-[#8b8b99]">{label}</label>
+                    {hint && <p className="text-xs text-[#8b8b99]/60">{hint}</p>}
+                  </div>
                   <div className="flex items-center gap-2">
                     {apiKeys[key] ? (
                       <Check className="w-4 h-4 text-[#10b981]" data-testid={`${key}-status-saved`} />
@@ -211,26 +215,23 @@ export default function Settings() {
             </button>
             {keyTestResult && !keyTestResult.error && (
               <div className="mt-3 space-y-2" data-testid="test-keys-result">
-                <div className="flex items-center gap-2 text-sm">
-                  {keyTestResult.openai ? (
-                    <Check className="w-4 h-4 text-[#10b981]" />
-                  ) : (
-                    <X className="w-4 h-4 text-[#ef4444]" />
-                  )}
-                  <span className={keyTestResult.openai ? 'text-[#10b981]' : 'text-[#ef4444]'}>
-                    OpenAI: {keyTestResult.openai ? 'Working' : 'Not configured'}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  {keyTestResult.falai ? (
-                    <Check className="w-4 h-4 text-[#10b981]" />
-                  ) : (
-                    <X className="w-4 h-4 text-[#ef4444]" />
-                  )}
-                  <span className={keyTestResult.falai ? 'text-[#10b981]' : 'text-[#ef4444]'}>
-                    FAL.AI: {keyTestResult.falai ? 'Working' : 'Not configured'}
-                  </span>
-                </div>
+                {[
+                  { key: 'openai', label: 'OpenAI' },
+                  { key: 'together', label: 'Together AI' },
+                  { key: 'gemini', label: 'Gemini' },
+                  { key: 'falai', label: 'FAL.AI' },
+                ].map(({ key, label }) => (
+                  <div key={key} className="flex items-center gap-2 text-sm">
+                    {keyTestResult[key] ? (
+                      <Check className="w-4 h-4 text-[#10b981]" />
+                    ) : (
+                      <X className="w-4 h-4 text-[#ef4444]" />
+                    )}
+                    <span className={keyTestResult[key] ? 'text-[#10b981]' : 'text-[#ef4444]'}>
+                      {label}: {keyTestResult[key] ? 'Working' : 'Not configured'}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
             {keyTestResult?.error && (
@@ -282,17 +283,21 @@ export default function Settings() {
 
         {/* Image Provider Section */}
         <section className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6" data-testid="image-provider-section">
-          <h2 className="font-heading text-lg font-semibold text-[#f8f8f8] mb-6">Image Provider</h2>
+          <h2 className="font-heading text-lg font-semibold text-[#f8f8f8] mb-2">Image Provider</h2>
+          <p className="text-xs text-[#8b8b99] mb-4">Choose which AI generates your images. Requires the corresponding API key above.</p>
           <RadioGroup
             value={settings.imageProvider}
             onValueChange={(value) => handleProviderChange('imageProvider', value)}
             className="space-y-3"
           >
             {[
-              { value: 'gpt-image-mini', label: 'GPT Image Mini', price: '$0.005/img' },
-              { value: 'gpt-image-1.5', label: 'GPT Image 1.5', price: '$0.04/img' },
-              { value: 'imagen-4', label: 'Imagen 4', price: '$0.02/img' }
-            ].map(({ value, label, price }) => (
+              { value: 'together-flux-schnell', label: 'FLUX Schnell Free', price: 'FREE', desc: 'Together AI', tag: 'Best value' },
+              { value: 'together-flux', label: 'FLUX Schnell', price: '$0.003/img', desc: 'Together AI' },
+              { value: 'gpt-image-mini', label: 'GPT Image Mini', price: '$0.005/img', desc: 'OpenAI' },
+              { value: 'imagen-4-fast', label: 'Imagen 4 Fast', price: '$0.02/img', desc: 'Google' },
+              { value: 'gemini-flash', label: 'Nano Banana', price: '$0.039/img', desc: 'Google Gemini' },
+              { value: 'gpt-image-1.5', label: 'GPT Image 1.5', price: '$0.04/img', desc: 'OpenAI', tag: 'Best quality' },
+            ].map(({ value, label, price, desc, tag }) => (
               <div
                 key={value}
                 className={`flex items-center space-x-3 border rounded-lg p-4 transition-all cursor-pointer ${
@@ -304,8 +309,12 @@ export default function Settings() {
               >
                 <RadioGroupItem value={value} id={value} data-testid={`image-provider-${value}`} />
                 <Label htmlFor={value} className="flex-1 cursor-pointer flex justify-between items-center">
-                  <span className="text-[#f8f8f8]">{label}</span>
-                  <span className="text-[#8b8b99] text-sm">{price}</span>
+                  <div>
+                    <span className="text-[#f8f8f8]">{label}</span>
+                    <span className="text-[#8b8b99] text-xs ml-2">({desc})</span>
+                    {tag && <span className="ml-2 text-xs px-1.5 py-0.5 bg-[#e94560]/20 text-[#e94560] rounded">{tag}</span>}
+                  </div>
+                  <span className={`text-sm font-medium ${price === 'FREE' ? 'text-[#10b981]' : 'text-[#8b8b99]'}`}>{price}</span>
                 </Label>
               </div>
             ))}

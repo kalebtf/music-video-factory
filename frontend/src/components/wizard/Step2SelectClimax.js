@@ -14,18 +14,29 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
   const [detectionMessage, setDetectionMessage] = useState('');
 
   useEffect(() => {
+    let cancelled = false;
+    let ws = null;
+
     const initWaveSurfer = async () => {
       if (!project.audioUrl || !waveformRef.current) return;
+
+      // Small delay to ensure DOM is ready
+      await new Promise(resolve => setTimeout(resolve, 100));
+      if (cancelled) return;
 
       try {
         const WaveSurfer = (await import('wavesurfer.js')).default;
         const RegionsPlugin = (await import('wavesurfer.js/dist/plugins/regions.js')).default;
 
+        if (cancelled) return;
+
+        // Destroy previous instance if any
         if (wavesurferRef.current) {
-          wavesurferRef.current.destroy();
+          try { wavesurferRef.current.destroy(); } catch(e) {}
+          wavesurferRef.current = null;
         }
 
-        const ws = WaveSurfer.create({
+        ws = WaveSurfer.create({
           container: waveformRef.current,
           waveColor: '#8b8b99',
           progressColor: '#e94560',
@@ -41,6 +52,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
         const regions = ws.registerPlugin(RegionsPlugin.create());
 
         ws.on('ready', () => {
+          if (cancelled) return;
           const dur = ws.getDuration();
           setDuration(dur);
           setIsReady(true);
@@ -77,21 +89,48 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
           setCurrentTime(ws.getCurrentTime());
         });
 
-        ws.load(project.audioUrl);
+        // Load audio - handle blob URLs (from local import) vs API paths
+        try {
+          if (project.audioUrl.startsWith('blob:') || project.audioUrl.startsWith('data:')) {
+            // Already a local blob URL (from file import), load directly
+            if (!cancelled) ws.load(project.audioUrl);
+          } else if (project.audioUrl.includes('/api/')) {
+            // API path - fetch with auth header, then create blob URL
+            const audioPath = project.audioUrl.replace(/.*\/api\//, '/');
+            const response = await api.get(audioPath, { responseType: 'blob' });
+            if (cancelled) return;
+            const blobUrl = URL.createObjectURL(response.data);
+            ws.load(blobUrl);
+          } else {
+            // Direct URL, load as-is
+            if (!cancelled) ws.load(project.audioUrl);
+          }
+        } catch(e) {
+          console.error('Failed to load audio:', e);
+          // Fallback: try loading directly
+          if (!cancelled) {
+            try { ws.load(project.audioUrl); } catch(e2) { console.error('Fallback also failed:', e2); }
+          }
+        }
+        
         wavesurferRef.current = ws;
       } catch (err) {
-        console.error('Failed to initialize WaveSurfer:', err);
+        if (!cancelled) {
+          console.error('Failed to initialize WaveSurfer:', err);
+        }
       }
     };
 
     initWaveSurfer();
 
     return () => {
+      cancelled = true;
       if (wavesurferRef.current) {
-        wavesurferRef.current.destroy();
+        try { wavesurferRef.current.destroy(); } catch(e) {}
+        wavesurferRef.current = null;
       }
     };
-  }, [project.audioUrl]);
+  }, [project.audioUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);

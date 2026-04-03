@@ -123,7 +123,9 @@ async def get_current_user(request: Request) -> dict:
             user["apiKeys"] = {
                 "openai": bool(user["apiKeys"].get("openai")),
                 "falai": bool(user["apiKeys"].get("falai")),
-                "kling": bool(user["apiKeys"].get("kling"))
+                "kling": bool(user["apiKeys"].get("kling")),
+                "gemini": bool(user["apiKeys"].get("gemini")),
+                "together": bool(user["apiKeys"].get("together"))
             }
         return user
     except jwt.ExpiredSignatureError:
@@ -236,7 +238,7 @@ class UserResponse(BaseModel):
     createdAt: str
 
 class ApiKeyUpdate(BaseModel):
-    provider: str  # openai, falai, kling
+    provider: str  # openai, falai, kling, gemini, together
     apiKey: str
 
 class ProviderSettings(BaseModel):
@@ -265,7 +267,7 @@ async def register(request: RegisterRequest, response: Response):
     user_doc = {
         "email": email,
         "password_hash": hashed,
-        "apiKeys": {"openai": "", "falai": "", "kling": ""},
+        "apiKeys": {"openai": "", "falai": "", "kling": "", "gemini": "", "together": ""},
         "settings": {"imageProvider": "gpt-image-mini", "videoProvider": "falai-wan"},
         "createdAt": datetime.now(timezone.utc).isoformat()
     }
@@ -382,9 +384,13 @@ async def test_keys(request: Request):
     
     openai_encrypted = api_keys.get("openai", "")
     falai_encrypted = api_keys.get("falai", "")
+    gemini_encrypted = api_keys.get("gemini", "")
+    together_encrypted = api_keys.get("together", "")
     
     openai_ok = False
     falai_ok = False
+    gemini_ok = False
+    together_ok = False
     
     if openai_encrypted:
         decrypted = decrypt_api_key(openai_encrypted)
@@ -394,9 +400,17 @@ async def test_keys(request: Request):
         decrypted = decrypt_api_key(falai_encrypted)
         falai_ok = bool(decrypted and len(decrypted) > 5)
     
-    logger.info(f"[AUTH] test-keys for {user.get('email')}: openai={openai_ok}, falai={falai_ok}")
+    if gemini_encrypted:
+        decrypted = decrypt_api_key(gemini_encrypted)
+        gemini_ok = bool(decrypted and len(decrypted) > 5)
     
-    return {"openai": openai_ok, "falai": falai_ok}
+    if together_encrypted:
+        decrypted = decrypt_api_key(together_encrypted)
+        together_ok = bool(decrypted and len(decrypted) > 5)
+    
+    logger.info(f"[AUTH] test-keys for {user.get('email')}: openai={openai_ok}, falai={falai_ok}, gemini={gemini_ok}, together={together_ok}")
+    
+    return {"openai": openai_ok, "falai": falai_ok, "gemini": gemini_ok, "together": together_ok}
 
 @api_router.post("/auth/refresh")
 async def refresh_token(request: Request, response: Response):
@@ -432,7 +446,7 @@ async def save_api_key(data: ApiKeyUpdate, request: Request):
     user = await get_current_user(request)
     logger.info(f"[SETTINGS] save_api_key called by {user.get('email')} for provider: {data.provider}")
     provider = data.provider.lower()
-    if provider not in ["openai", "falai", "kling"]:
+    if provider not in ["openai", "falai", "kling", "gemini", "together"]:
         raise HTTPException(status_code=400, detail="Invalid provider")
     
     encrypted = encrypt_api_key(data.apiKey)
@@ -507,7 +521,7 @@ async def get_projects(request: Request):
     user = await get_current_user(request)
     projects = await db.projects.find(
         {"userId": user["_id"]},
-        {"_id": 1, "title": 1, "status": 1, "totalCost": 1, "createdAt": 1}
+        {"_id": 1, "title": 1, "status": 1, "totalCost": 1, "createdAt": 1, "images": 1, "finalVideoPath": 1}
     ).sort("createdAt", -1).to_list(100)
     
     for p in projects:
@@ -570,6 +584,20 @@ async def delete_project(project_id: str, request: Request):
     result = await db.projects.delete_one({"_id": ObjectId(project_id), "userId": user["_id"]})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Clean up project files
+    import shutil
+    project_dir = PROJECTS_DIR / project_id
+    if project_dir.exists():
+        try:
+            shutil.rmtree(project_dir)
+            logger.info(f"Deleted project files: {project_dir}")
+        except Exception as e:
+            logger.error(f"Failed to delete project files: {e}")
+    
+    # Clean up cost logs
+    await db.cost_logs.delete_many({"projectId": project_id})
+    
     return {"success": True}
 
 # Templates Endpoints
@@ -621,9 +649,17 @@ async def root():
 # AUDIO PROCESSING ENDPOINTS
 # ========================================
 
-# Ensure projects directory exists
-PROJECTS_DIR = Path("/app/projects")
+# Ensure projects directory exists - use relative path that works on all platforms
+# On Emergent/Linux it was /app/projects, locally we use ./projects relative to backend dir
+import platform
+if platform.system() == "Windows":
+    # On Windows, use projects dir relative to the backend directory
+    PROJECTS_DIR = Path(__file__).parent.parent / "projects"
+else:
+    # On Linux/Emergent, use the original absolute path
+    PROJECTS_DIR = Path("/app/projects")
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+logger.info(f"Projects directory: {PROJECTS_DIR.resolve()}")
 
 class AudioUploadResponse(BaseModel):
     success: bool
@@ -791,12 +827,13 @@ async def extract_climax(project_id: str, data: ClimaxExtractionRequest, request
         logger.info(f"Extracting climax: {audio_path} -> {climax_path}")
         logger.info(f"Time range: {data.start}s to {data.end}s")
         
-        # Check if ffmpeg is available
-        ffmpeg_check = subprocess.run(['which', 'ffmpeg'], capture_output=True, text=True)
-        if ffmpeg_check.returncode != 0:
-            logger.error("ffmpeg not found, attempting to install...")
-            install_result = subprocess.run(['apt-get', 'install', '-y', 'ffmpeg'], capture_output=True, text=True)
-            logger.info(f"ffmpeg install result: {install_result.returncode}")
+        # Check if ffmpeg is available (cross-platform)
+        import shutil
+        ffmpeg_path = shutil.which('ffmpeg')
+        if not ffmpeg_path:
+            logger.error("ffmpeg not found on PATH. Please install ffmpeg and add it to PATH.")
+            raise Exception("ffmpeg not found. Install ffmpeg and ensure it's on your PATH.")
+        logger.info(f"ffmpeg found at: {ffmpeg_path}")
         
         # Run ffmpeg to extract segment
         cmd = [
@@ -867,6 +904,183 @@ async def get_user_openai_key(user_id: str) -> Optional[str]:
         return None
     return decrypt_api_key(encrypted_key)
 
+class ParseSongInfoRequest(BaseModel):
+    text: str
+
+@api_router.post("/ai/parse-song-info")
+async def parse_song_info(data: ParseSongInfoRequest, request: Request):
+    """Parse song info text using OpenAI to extract title, genre, and lyrics"""
+    user = await get_current_user(request)
+    logger.info(f"[AI] parse-song-info called by {user.get('email')}")
+    
+    openai_key = await get_user_openai_key(user["_id"])
+    if not openai_key:
+        raise HTTPException(status_code=400, detail="Please save your OpenAI API key in Settings first.")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": """You are a professional music analyst and metadata extractor. Given raw text from a song info file, extract:
+1. title: The song title
+2. genre: A DETAILED genre/style description that captures the full musical identity. Include:
+   - Primary genre (e.g., Latin Pop, Regional Mexicano, R&B, Hip-Hop, Corrido)
+   - Sub-genre or style (e.g., ballad, uptempo, tropical, trap)
+   - Mood/emotion (e.g., emotional, nostalgic, romantic, melancholic, empowering)
+   - Vocal style (e.g., duet male/female, soft female vocal, raspy male vocal)
+   - Key instruments or production style (e.g., piano-driven, mariachi, acoustic guitar, synth-heavy)
+   - Tempo feel (e.g., slow tempo, mid-tempo, uptempo, waltz)
+   Example good genre: "Latin pop ballad, emotional duet, nostalgic, piano and strings, slow tempo, cinematic feel"
+   Example good genre: "Regional mexicano corrido, male vocal, accordion and bajo sexto, mid-tempo, storytelling"
+   Example good genre: "R&B soul, smooth female vocal, lo-fi beats, intimate, slow groove"
+3. lyrics: The complete song lyrics (preserve all formatting, sections like [Verse], [Chorus], etc.)
+
+The text may be in ANY format - it could have labels like "Title:", "Genre:", "Lyrics:" or tags like [Genre], or it could just be raw text. Look for clues in the entire text including: style tags (e.g., [mariachi], [duet]), BPM info, instrumentation notes, mood descriptions, vocal directions.
+
+Respond ONLY with a JSON object (no markdown, no backticks):
+{"title": "...", "genre": "...", "lyrics": "..."}
+
+If you can't find a field, use empty string. For genre, ALWAYS infer a detailed description from the lyrics language, vocabulary, emotional tone, and any style hints in the text. Never return just one word like "Latin" - always be specific and descriptive."""
+                        },
+                        {
+                            "role": "user",
+                            "content": data.text[:5000]  # Limit to prevent token overflow
+                        }
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 2000
+                }
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"OpenAI parse error: {response.text}")
+                raise HTTPException(status_code=500, detail="AI parsing failed")
+            
+            result = response.json()
+            content = result["choices"][0]["message"]["content"].strip()
+            
+            # Parse JSON from response
+            import re
+            # Remove potential markdown backticks
+            content = re.sub(r'^```json\s*', '', content)
+            content = re.sub(r'\s*```$', '', content)
+            
+            parsed = json.loads(content)
+            
+            # Log cost
+            await db.cost_logs.insert_one({
+                "userId": user["_id"],
+                "date": datetime.now(timezone.utc).isoformat(),
+                "action": "parse-song",
+                "provider": "openai",
+                "cost": 0.001,
+                "details": "Song info parsing with GPT-4o-mini"
+            })
+            
+            return {
+                "title": parsed.get("title", ""),
+                "genre": parsed.get("genre", ""),
+                "lyrics": parsed.get("lyrics", "")
+            }
+            
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse AI response as JSON: {content}")
+        raise HTTPException(status_code=500, detail="AI returned invalid format")
+    except Exception as e:
+        logger.error(f"Song info parsing failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class AnalyzeImagesRequest(BaseModel):
+    projectId: str
+    imageUrls: List[str] = []  # base64 data URIs
+
+@api_router.post("/ai/analyze-images")
+async def analyze_images(data: AnalyzeImagesRequest, request: Request):
+    """Analyze uploaded images with GPT-4o vision to extract visual context"""
+    user = await get_current_user(request)
+    logger.info(f"[AI] analyze-images called by {user.get('email')} for project: {data.projectId}, {len(data.imageUrls)} images")
+    
+    openai_key = await get_user_openai_key(user["_id"])
+    if not openai_key:
+        raise HTTPException(status_code=400, detail="Please save your OpenAI API key in Settings first.")
+    
+    if not data.imageUrls:
+        return {"descriptions": "", "success": True}
+    
+    try:
+        # Build vision message with up to 3 images (to control cost)
+        image_content = []
+        for i, img_url in enumerate(data.imageUrls[:3]):
+            image_content.append({
+                "type": "image_url",
+                "image_url": {"url": img_url, "detail": "low"}
+            })
+        
+        image_content.append({
+            "type": "text",
+            "text": "Describe these reference images in detail. For each image, describe: the characters/people (appearance, clothing, expression), the setting/environment, the color palette, the mood/atmosphere, the lighting, and any notable visual elements. This will be used to create consistent visual prompts for a music video."
+        })
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": image_content
+                        }
+                    ],
+                    "max_tokens": 1000,
+                    "temperature": 0.5
+                }
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"OpenAI vision error: {response.text}")
+                return {"descriptions": "", "success": False, "error": "Vision API failed"}
+            
+            result = response.json()
+            descriptions = result["choices"][0]["message"]["content"].strip()
+            
+            # Save to project
+            await db.projects.update_one(
+                {"_id": ObjectId(data.projectId)},
+                {"$set": {"imageDescriptions": descriptions}}
+            )
+            
+            # Log cost
+            await db.cost_logs.insert_one({
+                "userId": user["_id"],
+                "projectId": data.projectId,
+                "date": datetime.now(timezone.utc).isoformat(),
+                "action": "image-analysis",
+                "provider": "openai",
+                "cost": 0.005,
+                "details": f"Analyzed {len(data.imageUrls[:3])} reference images"
+            })
+            
+            logger.info(f"Image analysis complete: {descriptions[:100]}...")
+            return {"descriptions": descriptions, "success": True}
+            
+    except Exception as e:
+        logger.error(f"Image analysis failed: {e}")
+        return {"descriptions": "", "success": False, "error": str(e)}
+
 @api_router.post("/ai/analyze-song")
 async def analyze_song(data: AnalyzeSongRequest, request: Request):
     """Analyze song with OpenAI GPT-4o-mini to generate visual concept"""
@@ -887,9 +1101,15 @@ async def analyze_song(data: AnalyzeSongRequest, request: Request):
     title = project.get("title", "Untitled")
     genre = project.get("genre", "Unknown")
     lyrics = project.get("lyrics", "")
+    image_descriptions = project.get("imageDescriptions", "")
     
     if not lyrics:
         raise HTTPException(status_code=400, detail="Please add lyrics to analyze the song")
+    
+    # Build the user message with optional image context
+    user_message = f"Title: {title}\nGenre: {genre}\nLyrics:\n{lyrics[:3000]}"
+    if image_descriptions:
+        user_message += f"\n\nReference Images Description (use these as visual inspiration for the prompts):\n{image_descriptions[:1000]}"
     
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -919,7 +1139,7 @@ Return ONLY valid JSON (no markdown, no code blocks) with exactly this structure
                         },
                         {
                             "role": "user",
-                            "content": f"Title: {title}\nGenre: {genre}\nLyrics:\n{lyrics[:3000]}"
+                            "content": user_message
                         }
                     ]
                 }
@@ -1002,15 +1222,9 @@ class GenerateImageResponse(BaseModel):
 
 @api_router.post("/ai/generate-image")
 async def generate_image(data: GenerateImageRequest, request: Request):
-    """Generate a single image using OpenAI GPT Image 1"""
+    """Generate a single image using OpenAI or Gemini"""
     user = await get_current_user(request)
     logger.info(f"[AI] generate-image called by {user.get('email')} for project: {data.projectId}, index: {data.imageIndex}")
-    
-    # Get OpenAI key
-    openai_key = await get_user_openai_key(user["_id"])
-    logger.info(f"[AI] OpenAI key found: {bool(openai_key)}")
-    if not openai_key:
-        raise HTTPException(status_code=400, detail="OpenAI API key not configured. Please add it in Settings.")
     
     # Verify project
     project = await db.projects.find_one({"_id": ObjectId(data.projectId), "userId": user["_id"]})
@@ -1021,111 +1235,236 @@ async def generate_image(data: GenerateImageRequest, request: Request):
     full_user = await db.users.find_one({"_id": ObjectId(user["_id"])})
     image_provider = full_user.get("settings", {}).get("imageProvider", "gpt-image-mini")
     
-    # Determine quality and cost based on provider
-    if image_provider == "gpt-image-mini":
-        quality = "low"
-        cost_per_image = 0.005
-    elif image_provider == "gpt-image-1.5":
-        quality = "medium"
-        cost_per_image = 0.04
-    else:
-        quality = "low"
-        cost_per_image = 0.005
+    # Create project images directory
+    project_dir = PROJECTS_DIR / data.projectId / "images"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    image_filename = f"img_{data.imageIndex}.png"
+    image_path = project_dir / image_filename
     
     try:
-        # Create project images directory
-        project_dir = PROJECTS_DIR / data.projectId / "images"
-        project_dir.mkdir(parents=True, exist_ok=True)
+        image_data = None
+        cost_per_image = 0.005
+        provider_name = "openai"
         
-        # Prepare request body
-        request_body = {
-            "model": "gpt-image-1",
-            "prompt": data.prompt,
-            "n": 1,
-            "size": "1024x1536",
-            "quality": quality
-        }
-        
-        logger.info(f"OpenAI Image Request: {json.dumps(request_body)}")
-        
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/images/generations",
-                headers={
-                    "Authorization": f"Bearer {openai_key}",
-                    "Content-Type": "application/json"
-                },
-                json=request_body
-            )
+        # ===== GEMINI PROVIDER =====
+        if image_provider.startswith("gemini"):
+            gemini_key = decrypt_api_key(full_user.get("apiKeys", {}).get("gemini", ""))
+            if not gemini_key:
+                raise HTTPException(status_code=400, detail="Gemini API key not configured. Please add it in Settings.")
             
-            response_text = response.text
-            logger.info(f"OpenAI Response Status: {response.status_code}")
+            provider_name = "gemini"
             
-            if response.status_code != 200:
-                try:
-                    error_data = response.json()
-                    error_message = error_data.get("error", {}).get("message", response_text[:500])
-                except Exception:
-                    error_message = response_text[:500]
-                logger.error(f"OpenAI API Error: {error_message}")
-                raise HTTPException(status_code=response.status_code, detail=f"OpenAI API error: {error_message}")
-            
-            result = response.json()
-            
-            # Get image data - OpenAI returns base64 in data[0].b64_json
-            if "data" not in result or len(result["data"]) == 0:
-                logger.error(f"No image data in response: {response_text[:500]}")
-                raise HTTPException(status_code=500, detail="OpenAI returned no image data")
-            
-            image_item = result["data"][0]
-            
-            # Check for b64_json or url
-            if "b64_json" in image_item:
-                b64_image = image_item["b64_json"]
-                image_data = base64.b64decode(b64_image)
-            elif "url" in image_item:
-                # Download from URL
-                img_response = await client.get(image_item["url"])
-                image_data = img_response.content
+            # Select model and cost based on provider setting
+            if image_provider == "gemini-flash":
+                model_id = "gemini-2.5-flash-image"
+                cost_per_image = 0.039
+            elif image_provider == "gemini-nano-banana-2":
+                model_id = "gemini-3.1-flash-image-preview"
+                cost_per_image = 0.045
+            elif image_provider == "imagen-4-fast":
+                model_id = "imagen-4.0-generate-preview-05-20"
+                cost_per_image = 0.02
             else:
-                logger.error(f"Unknown image format: {image_item.keys()}")
-                raise HTTPException(status_code=500, detail="Unknown image format in response")
+                model_id = "gemini-2.5-flash-image"
+                cost_per_image = 0.039
             
-            # Save image
-            image_filename = f"img_{data.imageIndex}.png"
-            image_path = project_dir / image_filename
+            logger.info(f"Using Gemini model: {model_id}, cost: ${cost_per_image}")
             
-            async with aiofiles.open(image_path, 'wb') as f:
-                await f.write(image_data)
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                # Gemini API for image generation
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
+                
+                gemini_body = {
+                    "contents": [{"parts": [{"text": f"{data.prompt}, vertical 9:16 format, cinematic, high quality"}]}],
+                    "generationConfig": {
+                        "responseModalities": ["IMAGE"],
+                        "imageConfig": {"aspectRatio": "9:16"}
+                    }
+                }
+                
+                response = await client.post(
+                    api_url,
+                    headers={"Content-Type": "application/json"},
+                    params={"key": gemini_key},
+                    json=gemini_body
+                )
+                
+                logger.info(f"Gemini Response Status: {response.status_code}")
+                
+                if response.status_code != 200:
+                    error_text = response.text[:500]
+                    logger.error(f"Gemini API Error: {error_text}")
+                    raise HTTPException(status_code=response.status_code, detail=f"Gemini API error: {error_text}")
+                
+                result = response.json()
+                
+                # Extract image from Gemini response
+                # Response format: candidates[0].content.parts[].inlineData.data (base64)
+                candidates = result.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    for part in parts:
+                        inline_data = part.get("inlineData")
+                        if inline_data and inline_data.get("data"):
+                            image_data = base64.b64decode(inline_data["data"])
+                            break
+                
+                if not image_data:
+                    logger.error(f"No image in Gemini response: {json.dumps(result)[:500]}")
+                    raise HTTPException(status_code=500, detail="Gemini returned no image data")
+        
+        # ===== TOGETHER AI PROVIDER (FLUX) =====
+        elif image_provider.startswith("together"):
+            together_key = decrypt_api_key(full_user.get("apiKeys", {}).get("together", ""))
+            if not together_key:
+                raise HTTPException(status_code=400, detail="Together AI API key not configured. Please add it in Settings.")
             
-            logger.info(f"Image saved: {image_path}")
+            provider_name = "together"
             
-            # Create URL path for frontend
-            image_url = f"/api/projects/{data.projectId}/images/{image_filename}"
+            # Select model based on provider setting
+            if image_provider == "together-flux-schnell":
+                model_id = "black-forest-labs/FLUX.1-schnell-Free"
+                cost_per_image = 0.0  # Free tier
+            elif image_provider == "together-flux-dev":
+                model_id = "black-forest-labs/FLUX.1-dev"
+                cost_per_image = 0.025
+            else:
+                model_id = "black-forest-labs/FLUX.1-schnell"
+                cost_per_image = 0.0027
             
-            # Log cost
-            await db.cost_logs.insert_one({
-                "userId": user["_id"],
-                "projectId": data.projectId,
-                "date": datetime.now(timezone.utc).isoformat(),
-                "action": "image",
-                "provider": "openai",
-                "cost": cost_per_image,
-                "details": f"Image {data.imageIndex}: {data.prompt[:50]}..."
-            })
+            logger.info(f"Using Together AI model: {model_id}, cost: ${cost_per_image}")
             
-            # Update project total cost
-            await db.projects.update_one(
-                {"_id": ObjectId(data.projectId)},
-                {"$inc": {"totalCost": cost_per_image}}
-            )
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                # Together AI uses OpenAI-compatible format
+                response = await client.post(
+                    "https://api.together.xyz/v1/images/generations",
+                    headers={
+                        "Authorization": f"Bearer {together_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": model_id,
+                        "prompt": f"{data.prompt}, vertical 9:16 portrait format, cinematic, high quality, detailed",
+                        "n": 1,
+                        "width": 768,
+                        "height": 1344,
+                        "steps": 4,
+                        "response_format": "b64_json"
+                    }
+                )
+                
+                logger.info(f"Together AI Response Status: {response.status_code}")
+                
+                if response.status_code != 200:
+                    error_text = response.text[:500]
+                    logger.error(f"Together AI Error: {error_text}")
+                    raise HTTPException(status_code=response.status_code, detail=f"Together AI error: {error_text}")
+                
+                result = response.json()
+                
+                if "data" in result and len(result["data"]) > 0:
+                    item = result["data"][0]
+                    if "b64_json" in item:
+                        image_data = base64.b64decode(item["b64_json"])
+                    elif "url" in item:
+                        img_response = await client.get(item["url"])
+                        image_data = img_response.content
+                
+                if not image_data:
+                    logger.error(f"No image in Together AI response: {json.dumps(result)[:500]}")
+                    raise HTTPException(status_code=500, detail="Together AI returned no image data")
+        
+        # ===== OPENAI PROVIDER (default) =====
+        else:
+            openai_key = await get_user_openai_key(user["_id"])
+            if not openai_key:
+                raise HTTPException(status_code=400, detail="OpenAI API key not configured. Please add it in Settings.")
             
-            return {
-                "success": True,
-                "imageUrl": image_url,
-                "imagePath": str(image_path),
-                "cost": cost_per_image
+            if image_provider == "gpt-image-mini":
+                quality = "low"
+                cost_per_image = 0.005
+            elif image_provider == "gpt-image-1.5":
+                quality = "medium"
+                cost_per_image = 0.04
+            else:
+                quality = "low"
+                cost_per_image = 0.005
+            
+            request_body = {
+                "model": "gpt-image-1",
+                "prompt": data.prompt,
+                "n": 1,
+                "size": "1024x1536",
+                "quality": quality
             }
+            
+            logger.info(f"OpenAI Image Request: {json.dumps(request_body)}")
+            
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/images/generations",
+                    headers={
+                        "Authorization": f"Bearer {openai_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json=request_body
+                )
+                
+                logger.info(f"OpenAI Response Status: {response.status_code}")
+                
+                if response.status_code != 200:
+                    try:
+                        error_data = response.json()
+                        error_message = error_data.get("error", {}).get("message", response.text[:500])
+                    except Exception:
+                        error_message = response.text[:500]
+                    logger.error(f"OpenAI API Error: {error_message}")
+                    raise HTTPException(status_code=response.status_code, detail=f"OpenAI API error: {error_message}")
+                
+                result = response.json()
+                
+                if "data" not in result or len(result["data"]) == 0:
+                    raise HTTPException(status_code=500, detail="OpenAI returned no image data")
+                
+                image_item = result["data"][0]
+                
+                if "b64_json" in image_item:
+                    image_data = base64.b64decode(image_item["b64_json"])
+                elif "url" in image_item:
+                    img_response = await client.get(image_item["url"])
+                    image_data = img_response.content
+                else:
+                    raise HTTPException(status_code=500, detail="Unknown image format in response")
+        
+        # ===== SAVE IMAGE (common for all providers) =====
+        async with aiofiles.open(image_path, 'wb') as f:
+            await f.write(image_data)
+        
+        logger.info(f"Image saved: {image_path} (provider: {provider_name})")
+        
+        image_url = f"/api/projects/{data.projectId}/images/{image_filename}"
+        
+        await db.cost_logs.insert_one({
+            "userId": user["_id"],
+            "projectId": data.projectId,
+            "date": datetime.now(timezone.utc).isoformat(),
+            "action": "image",
+            "provider": provider_name,
+            "cost": cost_per_image,
+            "details": f"Image {data.imageIndex}: {data.prompt[:50]}..."
+        })
+        
+        await db.projects.update_one(
+            {"_id": ObjectId(data.projectId)},
+            {"$inc": {"totalCost": cost_per_image}}
+        )
+        
+        return {
+            "success": True,
+            "imageUrl": image_url,
+            "imagePath": str(image_path),
+            "cost": cost_per_image
+        }
             
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Image generation timeout. Please try again.")
@@ -1245,10 +1584,10 @@ async def animate_image(data: AnimateImageRequest, request: Request):
         image_b64 = base64.b64encode(image_data).decode('utf-8')
         image_data_uri = f"data:image/png;base64,{image_b64}"
         
-        # Submit job to FAL.AI
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Submit job to FAL.AI - using fal-ai/wan-i2v (Wan 2.1 image-to-video)
+        async with httpx.AsyncClient(timeout=60.0) as client:
             submit_response = await client.post(
-                "https://queue.fal.run/fal-ai/wan/image-to-video",
+                "https://queue.fal.run/fal-ai/wan-i2v",
                 headers={
                     "Authorization": f"Key {fal_key}",
                     "Content-Type": "application/json"
@@ -1257,11 +1596,8 @@ async def animate_image(data: AnimateImageRequest, request: Request):
                     "image_url": image_data_uri,
                     "prompt": f"{data.prompt}, cinematic, emotional, smooth camera movement, high quality",
                     "negative_prompt": "blurry, distorted, text, watermark, low quality, static, jerky",
-                    "num_inference_steps": 30,
-                    "num_frames": 81,
-                    "fps": 16,
-                    "guidance_scale": 5.0,
-                    "image_size": {"width": 576, "height": 1024}
+                    "resolution": "480p",
+                    "num_frames": 81
                 }
             )
             
@@ -1276,10 +1612,32 @@ async def animate_image(data: AnimateImageRequest, request: Request):
             if not request_id:
                 raise HTTPException(status_code=500, detail="FAL.AI did not return a request ID")
             
+            # Log the full submit response to see what URLs FAL.AI gives us
+            logger.info(f"FAL.AI submit response: {json.dumps(result)}")
+            
+            # Save the URLs FAL.AI gives us - these are the correct ones to use
+            response_url = result.get("response_url", "")
+            status_url = result.get("status_url", "")
+            
+            # Store these URLs in the project for later use during polling
+            await db.projects.update_one(
+                {"_id": ObjectId(data.projectId)},
+                {"$set": {
+                    f"animation_jobs.{data.imageIndex}": {
+                        "request_id": request_id,
+                        "response_url": response_url,
+                        "status_url": status_url,
+                        "submitted_at": datetime.now(timezone.utc).isoformat()
+                    }
+                }}
+            )
+            
             return {
                 "success": True,
                 "requestId": request_id,
-                "status": "IN_QUEUE"
+                "status": "IN_QUEUE",
+                "responseUrl": response_url,
+                "statusUrl": status_url
             }
             
     except httpx.TimeoutException:
@@ -1300,28 +1658,104 @@ async def get_animation_status(request_id: str, project_id: str, image_index: in
         raise HTTPException(status_code=400, detail="FAL.AI API key not configured")
     
     try:
+        # First, check if we have saved URLs from the submit response
+        project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+        saved_job = None
+        if project and "animation_jobs" in project:
+            saved_job = project["animation_jobs"].get(str(image_index))
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
+            # Use saved status_url if available, otherwise construct it
+            if saved_job and saved_job.get("status_url"):
+                status_check_url = saved_job["status_url"]
+                logger.info(f"Using saved status_url: {status_check_url}")
+            else:
+                # Construct URL - per FAL.AI docs, no subpath for status
+                status_check_url = f"https://queue.fal.run/fal-ai/wan-i2v/requests/{request_id}/status"
+                logger.info(f"Using constructed status_url: {status_check_url}")
+            
             status_response = await client.get(
-                f"https://queue.fal.run/fal-ai/wan/image-to-video/status/{request_id}",
+                status_check_url,
                 headers={"Authorization": f"Key {fal_key}"}
             )
             
-            if status_response.status_code != 200:
-                return {"status": "ERROR", "error": status_response.text}
+            # FAL.AI returns 200 for COMPLETED and 202 for IN_QUEUE/IN_PROGRESS
+            # Both are valid responses!
+            if status_response.status_code not in (200, 202):
+                logger.error(f"FAL.AI status check failed: {status_response.status_code} - {status_response.text}")
+                return {"status": "ERROR", "error": f"Status check failed: {status_response.status_code}"}
             
             status_data = status_response.json()
             status = status_data.get("status", "UNKNOWN")
+            logger.info(f"FAL.AI animation status for {request_id}: HTTP {status_response.status_code}, status={status}")
             
             if status == "COMPLETED":
-                # Get the result
-                result_response = await client.get(
-                    f"https://queue.fal.run/fal-ai/wan/image-to-video/result/{request_id}",
-                    headers={"Authorization": f"Key {fal_key}"}
-                )
+                logger.info(f"FAL.AI COMPLETED full response: {json.dumps(status_data)}")
                 
-                if result_response.status_code == 200:
-                    result_data = result_response.json()
-                    video_url = result_data.get("video", {}).get("url")
+                result_data = None
+                
+                # Strategy 1: Use saved response_url from submit
+                if saved_job and saved_job.get("response_url"):
+                    resp_url = saved_job["response_url"]
+                    logger.info(f"Trying saved response_url: {resp_url}")
+                    result_response = await client.get(
+                        resp_url,
+                        headers={"Authorization": f"Key {fal_key}"}
+                    )
+                    logger.info(f"Saved response_url returned: {result_response.status_code}")
+                    if result_response.status_code == 200:
+                        result_data = result_response.json()
+                
+                # Strategy 2: Use response_url from status response
+                if not result_data and status_data.get("response_url"):
+                    resp_url = status_data["response_url"]
+                    logger.info(f"Trying status response_url: {resp_url}")
+                    result_response = await client.get(
+                        resp_url,
+                        headers={"Authorization": f"Key {fal_key}"}
+                    )
+                    logger.info(f"Status response_url returned: {result_response.status_code}")
+                    if result_response.status_code == 200:
+                        result_data = result_response.json()
+                
+                # Strategy 3: Construct URLs manually
+                if not result_data:
+                    urls_to_try = [
+                        f"https://queue.fal.run/fal-ai/wan-i2v/requests/{request_id}",
+                    ]
+                    for url in urls_to_try:
+                        logger.info(f"Trying constructed URL: {url}")
+                        result_response = await client.get(
+                            url,
+                            headers={"Authorization": f"Key {fal_key}"}
+                        )
+                        logger.info(f"URL {url} returned: {result_response.status_code}")
+                        if result_response.status_code == 200:
+                            result_data = result_response.json()
+                            break
+                
+                if result_data:
+                    logger.info(f"FAL.AI result keys: {list(result_data.keys())}")
+                    logger.info(f"FAL.AI full result: {json.dumps(result_data)[:500]}")
+                    
+                    # Try multiple paths to find the video URL
+                    video_url = None
+                    if "video" in result_data:
+                        v = result_data["video"]
+                        video_url = v.get("url") if isinstance(v, dict) else v
+                    elif "output" in result_data:
+                        output = result_data["output"]
+                        if isinstance(output, dict) and "video" in output:
+                            v = output["video"]
+                            video_url = v.get("url") if isinstance(v, dict) else v
+                    elif "data" in result_data:
+                        # Some models use data.video
+                        d = result_data["data"]
+                        if isinstance(d, dict) and "video" in d:
+                            v = d["video"]
+                            video_url = v.get("url") if isinstance(v, dict) else v
+                    
+                    logger.info(f"Video URL found: {video_url}")
                     
                     if video_url:
                         # Download and save video
@@ -1412,23 +1846,86 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
     clip_paths = []
     for idx in data.clipOrder:
         clip_path = clips_dir / f"clip_{idx}.mp4"
+        logger.info(f"Looking for clip at: {clip_path} (exists: {clip_path.exists()})")
         if clip_path.exists():
             clip_paths.append(str(clip_path))
     
-    if len(clip_paths) < 2:
-        raise HTTPException(status_code=400, detail="Need at least 2 clips to assemble video")
+    logger.info(f"Found {len(clip_paths)} clips out of {len(data.clipOrder)} requested")
     
-    # Get audio path
-    audio_path = project.get("audioClimaxPath") or project.get("audioOriginalPath")
+    if len(clip_paths) < 1:
+        raise HTTPException(status_code=400, detail="Need at least 1 clip to assemble video")
+    
+    # Get audio path - fix stored paths that may have /app/projects prefix
+    audio_path_raw = project.get("audioClimaxPath") or project.get("audioOriginalPath")
+    audio_path = None
+    if audio_path_raw:
+        audio_path_obj = Path(audio_path_raw)
+        if audio_path_obj.exists():
+            audio_path = str(audio_path_obj)
+        else:
+            # Try to resolve relative to PROJECTS_DIR
+            clean_path = str(audio_path_raw).replace("/app/projects/", "").replace("\\app\\projects\\", "")
+            resolved = PROJECTS_DIR / clean_path
+            if resolved.exists():
+                audio_path = str(resolved)
+            else:
+                logger.warning(f"Audio file not found: {audio_path_raw} (also tried {resolved})")
+    
+    # Get audio duration to know how long to loop clips
+    audio_duration = 0
+    if audio_path:
+        try:
+            probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', 
+                        '-of', 'default=noprint_wrappers=1:nokey=1', audio_path]
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            if probe_result.returncode == 0 and probe_result.stdout.strip():
+                audio_duration = float(probe_result.stdout.strip())
+                logger.info(f"Audio duration: {audio_duration}s")
+        except Exception as e:
+            logger.error(f"Failed to get audio duration: {e}")
+    
+    # Get each clip's duration
+    clip_durations = []
+    for cp in clip_paths:
+        try:
+            probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                        '-of', 'default=noprint_wrappers=1:nokey=1', cp]
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            if probe_result.returncode == 0 and probe_result.stdout.strip():
+                clip_durations.append(float(probe_result.stdout.strip()))
+            else:
+                clip_durations.append(5.0)  # default 5s
+        except:
+            clip_durations.append(5.0)
+    
+    total_clip_duration = sum(clip_durations) if clip_durations else 5.0
+    logger.info(f"Total clip duration: {total_clip_duration}s, Audio duration: {audio_duration}s")
     
     output_path = final_dir / "video.mp4"
     
     try:
-        # Create concat file for FFmpeg
+        # Create concat file with clips looped to cover audio duration
         concat_file = final_dir / "concat.txt"
         async with aiofiles.open(concat_file, 'w') as f:
-            for path in clip_paths:
-                await f.write(f"file '{path}'\n")
+            if audio_duration > 0 and total_clip_duration < audio_duration:
+                # Loop clips until we cover the full audio duration
+                accumulated = 0
+                clip_index = 0
+                loop_count = 0
+                while accumulated < audio_duration:
+                    path = clip_paths[clip_index % len(clip_paths)]
+                    dur = clip_durations[clip_index % len(clip_durations)]
+                    await f.write(f"file '{path}'\n")
+                    accumulated += dur
+                    clip_index += 1
+                    loop_count += 1
+                    if loop_count > 200:  # safety limit
+                        break
+                logger.info(f"Looped {loop_count} clips to cover {audio_duration}s (accumulated: {accumulated}s)")
+            else:
+                # No audio or clips are longer - just concat once
+                for path in clip_paths:
+                    await f.write(f"file '{path}'\n")
         
         # Build FFmpeg command
         # First concat clips

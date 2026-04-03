@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Video, Settings, Plus, Film, Calendar, DollarSign, Loader2 } from 'lucide-react';
+import { Video, Settings, Plus, Film, Calendar, DollarSign, Loader2, Trash2, Play, Edit3, X } from 'lucide-react';
+import { AuthImage, AuthVideo } from '../components/AuthImage';
 
 export default function Dashboard() {
   const { user, logout } = useAuth();
@@ -10,6 +11,9 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ totalVideos: 0, monthCost: 0, weekVideos: 0 });
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // {id, title}
+  const [videoPreview, setVideoPreview] = useState(null); // project id for video modal
 
   useEffect(() => {
     fetchData();
@@ -27,6 +31,20 @@ export default function Dashboard() {
       console.error('Failed to fetch data:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async (projectId) => {
+    setDeleting(projectId);
+    try {
+      await api.delete(`/projects/${projectId}`);
+      setProjects(prev => prev.filter(p => p._id !== projectId));
+    } catch (err) {
+      alert('Failed to delete project');
+      console.error(err);
+    } finally {
+      setDeleting(null);
+      setDeleteConfirm(null);
     }
   };
 
@@ -142,15 +160,52 @@ export default function Dashboard() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" data-testid="projects-grid">
             {projects.map((project) => (
-              <Link
+              <div
                 key={project._id}
-                to={`/project/${project._id}`}
-                className="bg-[#141418] border border-[#2a2a35] rounded-xl overflow-hidden hover:border-[#e94560]/50 transition-all cursor-pointer block"
+                className="bg-[#141418] border border-[#2a2a35] rounded-xl overflow-hidden hover:border-[#e94560]/50 transition-all"
                 data-testid={`project-card-${project._id}`}
               >
-                {/* Thumbnail Placeholder */}
-                <div className="aspect-video bg-[#0c0c0f] flex items-center justify-center">
-                  <Film className="w-10 h-10 text-[#2a2a35]" strokeWidth={1} />
+                {/* Thumbnail - show first image if available */}
+                <div className="aspect-video bg-[#0c0c0f] flex items-center justify-center relative group">
+                  {project.images && project.images.length > 0 && project.images.find(img => img.url) ? (
+                    <AuthImage 
+                      src={project.images.find(img => img.url).url} 
+                      alt={project.title} 
+                      className="w-full h-full object-cover"
+                    />
+                  ) : project.images && project.images.length > 0 ? (
+                    <div className="w-full h-full bg-gradient-to-br from-[#e94560]/30 to-[#0f3460]/30 flex items-center justify-center">
+                      <Film className="w-10 h-10 text-[#e94560]/50" strokeWidth={1} />
+                    </div>
+                  ) : (
+                    <Film className="w-10 h-10 text-[#2a2a35]" strokeWidth={1} />
+                  )}
+                  {/* Overlay with actions */}
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-all flex items-center justify-center gap-3 opacity-0 group-hover:opacity-100">
+                    {project.finalVideoPath && (
+                      <button
+                        onClick={() => setVideoPreview(project._id)}
+                        className="bg-[#e94560] text-white p-3 rounded-full hover:bg-[#f25a74] transition-all"
+                        title="Play video"
+                      >
+                        <Play className="w-5 h-5" />
+                      </button>
+                    )}
+                    <Link
+                      to={`/project/${project._id}`}
+                      className="bg-[#2a2a35] text-white p-3 rounded-full hover:bg-[#3a3a45] transition-all"
+                      title="Edit project"
+                    >
+                      <Edit3 className="w-5 h-5" />
+                    </Link>
+                    <button
+                      onClick={(e) => { e.preventDefault(); setDeleteConfirm({ id: project._id, title: project.title }); }}
+                      className="bg-[#2a2a35] text-red-400 p-3 rounded-full hover:bg-red-500/20 transition-all"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
                 <div className="p-4">
                   <div className="flex items-start justify-between mb-2">
@@ -166,11 +221,65 @@ export default function Dashboard() {
                     <span className="text-[#e94560]">${(project.totalCost || 0).toFixed(2)}</span>
                   </div>
                 </div>
-              </Link>
+              </div>
             ))}
           </div>
         )}
       </main>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6 max-w-md w-full mx-4">
+            <h3 className="font-heading text-lg font-bold text-[#f8f8f8] mb-2">Delete Project</h3>
+            <p className="text-[#8b8b99] mb-6">
+              Are you sure you want to delete <span className="text-[#f8f8f8] font-medium">"{deleteConfirm.title}"</span>? 
+              This will remove all images, clips, and the final video. This action cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="px-4 py-2 bg-[#2a2a35] text-[#f8f8f8] rounded-lg hover:bg-[#3a3a45] transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDelete(deleteConfirm.id)}
+                disabled={deleting === deleteConfirm.id}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all disabled:opacity-50 flex items-center gap-2"
+              >
+                {deleting === deleteConfirm.id ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Deleting...</>
+                ) : (
+                  <><Trash2 className="w-4 h-4" /> Delete</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Video Preview Modal */}
+      {videoPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick={() => setVideoPreview(null)}>
+          <div className="relative max-w-lg w-full mx-4" onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => setVideoPreview(null)}
+              className="absolute -top-10 right-0 text-white hover:text-[#e94560] transition-all"
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <div className="aspect-[9/16] bg-black rounded-xl overflow-hidden">
+              <AuthVideo
+                src={`/api/projects/${videoPreview}/final/video.mp4`}
+                className="w-full h-full object-contain"
+                controls
+                autoPlay
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -54,6 +54,18 @@ export default function Step3VisualConcept({ project, updateProject, projectId }
     setError('');
     
     try {
+      // If user uploaded images, analyze them first for visual context
+      if (project.imageDataUris && project.imageDataUris.length > 0) {
+        try {
+          await api.post('/ai/analyze-images', {
+            projectId,
+            imageUrls: project.imageDataUris
+          });
+        } catch (imgErr) {
+          console.error('Image analysis failed (non-blocking):', imgErr);
+        }
+      }
+      
       const { data } = await api.post(
         '/ai/analyze-song',
         { projectId }
