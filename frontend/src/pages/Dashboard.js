@@ -209,9 +209,20 @@ export default function Dashboard() {
                 </div>
                 <div className="p-4">
                   <div className="flex items-start justify-between mb-2">
-                    <h3 className="font-heading font-semibold text-[#f8f8f8] truncate pr-2">
-                      {project.title}
-                    </h3>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <h3 className="font-heading font-semibold text-[#f8f8f8] truncate">
+                        {project.title}
+                      </h3>
+                      {project.mode && (
+                        <span className={`px-1.5 py-0.5 text-[9px] font-medium rounded uppercase tracking-wider flex-shrink-0 ${
+                          project.mode === 'library'
+                            ? 'bg-[#00b4d8]/15 text-[#00b4d8]'
+                            : 'bg-[#e94560]/15 text-[#e94560]'
+                        }`}>
+                          {project.mode === 'library' ? 'LIB' : 'AI'}
+                        </span>
+                      )}
+                    </div>
                     <span className={`px-2 py-1 text-xs rounded-md whitespace-nowrap ${getStatusColor(project.status)}`}>
                       {project.status}
                     </span>

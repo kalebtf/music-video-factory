@@ -1,18 +1,27 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../lib/api';
-import { Video, ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, DollarSign } from 'lucide-react';
+import { Video, ArrowLeft, Check, ChevronLeft, ChevronRight, DollarSign } from 'lucide-react';
 
-// Step components
+// Shared step components
 import Step1SongInput from '../components/wizard/Step1SongInput';
 import Step2SelectClimax from '../components/wizard/Step2SelectClimax';
+
+// AI Mode step components
 import Step3VisualConcept from '../components/wizard/Step3VisualConcept';
 import Step4GenerateImages from '../components/wizard/Step4GenerateImages';
 import Step5AnimateClips from '../components/wizard/Step5AnimateClips';
+
+// Library Mode step components
+import StepMediaLibrary from '../components/wizard/StepMediaLibrary';
+import StepHooksText from '../components/wizard/StepHooksText';
+
+// Shared final steps
 import Step6AssembleVideo from '../components/wizard/Step6AssembleVideo';
 import Step7ExportPublish from '../components/wizard/Step7ExportPublish';
+import ModeSelection from '../components/wizard/ModeSelection';
 
-const STEPS = [
+const AI_STEPS = [
   { id: 1, name: 'Song Input', shortName: 'Song' },
   { id: 2, name: 'Select Climax', shortName: 'Climax' },
   { id: 3, name: 'Visual Concept', shortName: 'Concept' },
@@ -22,12 +31,22 @@ const STEPS = [
   { id: 7, name: 'Export & Publish', shortName: 'Export' },
 ];
 
+const LIBRARY_STEPS = [
+  { id: 1, name: 'Song Input', shortName: 'Song' },
+  { id: 2, name: 'Select Climax', shortName: 'Climax' },
+  { id: 3, name: 'Media Library', shortName: 'Media' },
+  { id: 4, name: 'Hooks & Text', shortName: 'Hooks' },
+  { id: 5, name: 'Assemble Video', shortName: 'Assemble' },
+  { id: 6, name: 'Export & Publish', shortName: 'Export' },
+];
+
 const initialProjectState = {
   title: '',
   genre: '',
   lyrics: '',
   templateId: null,
   template: null,
+  mode: null, // null = not yet selected, 'ai' or 'library'
   audioFile: null,
   audioUrl: null,
   uploadedImages: [],
@@ -45,6 +64,7 @@ const initialProjectState = {
   },
   images: [],
   clips: [],
+  media: [], // Library mode media pool
   assembledVideo: null,
   assemblySettings: {
     crossfade: 0.5,
@@ -68,7 +88,10 @@ export default function NewVideo() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Fetch templates on mount
+  const mode = project.mode;
+  const steps = mode === 'library' ? LIBRARY_STEPS : AI_STEPS;
+  const maxStep = steps.length;
+
   useEffect(() => {
     fetchTemplates();
     if (projectId) {
@@ -90,7 +113,6 @@ export default function NewVideo() {
       setLoading(true);
       const { data } = await api.get(`/projects/${id}`);
 
-      // Reconstruct images with full URLs
       const loadedImages = (data.images || []).map(img => ({
         ...img,
         url: img.url || '',
@@ -98,7 +120,6 @@ export default function NewVideo() {
         cost: img.cost || 0,
       }));
 
-      // Reconstruct clips with full URLs
       const loadedClips = (data.clips || []).map(clip => ({
         ...clip,
         status: clip.status || 'pending',
@@ -106,11 +127,9 @@ export default function NewVideo() {
         duration: clip.duration || 5.0,
       }));
 
-      // Calculate costs from loaded data
       const imageCost = loadedImages.reduce((sum, img) => sum + (img.cost || 0), 0);
       const clipCost = loadedClips.reduce((sum, c) => sum + (c.cost || 0), 0);
 
-      // Restore concept with defaults
       const savedConcept = data.concept || {};
       const concept = {
         theme: savedConcept.theme || '',
@@ -122,7 +141,10 @@ export default function NewVideo() {
         customInstructions: savedConcept.customInstructions || '',
         numImages: savedConcept.numImages || 3,
         animationStyle: savedConcept.animationStyle || '',
+        characterMode: savedConcept.characterMode || 'visible',
       };
+
+      const projectMode = data.mode || 'ai';
 
       setProject({
         ...initialProjectState,
@@ -130,11 +152,13 @@ export default function NewVideo() {
         genre: data.genre || '',
         lyrics: data.lyrics || '',
         templateId: data.templateId,
+        mode: projectMode,
         climaxStart: data.climaxStart || 0,
         climaxEnd: data.climaxEnd || 30,
         concept,
         images: loadedImages,
         clips: loadedClips,
+        media: data.media || [],
         assembledVideo: data.finalVideoPath ? {
           url: `/api/projects/${id}/final/video.mp4`,
           duration: 0,
@@ -148,16 +172,25 @@ export default function NewVideo() {
       });
       setProjectDbId(id);
 
-      // Determine which step to resume from based on actual data
+      // Determine resume step based on mode
       let resumeStep = 1;
-      if (data.title) resumeStep = 2;
-      if (data.audioClimaxPath || data.climaxStart > 0) resumeStep = 3;
-      if (concept.prompts.some(p => p && p.trim())) resumeStep = 4;
-      if (loadedImages.length > 0) resumeStep = 4;
-      if (loadedImages.filter(img => img.status === 'approved').length >= 2) resumeStep = 5;
-      if (loadedClips.length > 0) resumeStep = 5;
-      if (loadedClips.filter(c => c.status === 'approved').length >= 2) resumeStep = 6;
-      if (data.finalVideoPath) resumeStep = 7;
+      if (projectMode === 'library') {
+        if (data.title) resumeStep = 2;
+        if (data.audioClimaxPath || data.climaxStart > 0) resumeStep = 3;
+        if ((data.media || []).length > 0) resumeStep = 3;
+        if ((data.media || []).filter(m => m.status === 'approved').length >= 2) resumeStep = 4;
+        if (concept.selectedHooks.length > 0 || (data.media || []).filter(m => m.status === 'approved').length >= 2) resumeStep = 5;
+        if (data.finalVideoPath) resumeStep = 6;
+      } else {
+        if (data.title) resumeStep = 2;
+        if (data.audioClimaxPath || data.climaxStart > 0) resumeStep = 3;
+        if (concept.prompts.some(p => p && p.trim())) resumeStep = 4;
+        if (loadedImages.length > 0) resumeStep = 4;
+        if (loadedImages.filter(img => img.status === 'approved').length >= 2) resumeStep = 5;
+        if (loadedClips.length > 0) resumeStep = 5;
+        if (loadedClips.filter(c => c.status === 'approved').length >= 2) resumeStep = 6;
+        if (data.finalVideoPath) resumeStep = 7;
+      }
 
       setCurrentStep(resumeStep);
     } catch (err) {
@@ -176,14 +209,14 @@ export default function NewVideo() {
         genre: project.genre,
         lyrics: project.lyrics,
         templateId: project.templateId,
+        mode: project.mode,
       });
       setProjectDbId(data._id);
-      
-      // Upload audio file if exists
+
       if (project.audioFile) {
         await uploadAudioFile(data._id, project.audioFile);
       }
-      
+
       return data._id;
     } catch (err) {
       console.error('Failed to create project:', err);
@@ -197,15 +230,13 @@ export default function NewVideo() {
     try {
       const formData = new FormData();
       formData.append('file', audioFile);
-      
+
       const { data } = await api.post(
         `/audio/upload/${projId}`,
         formData,
-        { 
-          headers: { 'Content-Type': 'multipart/form-data' }
-        }
+        { headers: { 'Content-Type': 'multipart/form-data' } }
       );
-      
+
       updateProject({ audioDuration: data.duration });
     } catch (err) {
       console.error('Failed to upload audio:', err);
@@ -234,23 +265,27 @@ export default function NewVideo() {
   const totalCost = project.costs.images + project.costs.clips + project.costs.assembly;
 
   const canProceed = () => {
-    switch (currentStep) {
-      case 1:
-        return project.title.trim() !== '';
-      case 2:
-        return project.climaxEnd > project.climaxStart;
-      case 3:
-        return project.concept.prompts.some(p => p.trim() !== '');
-      case 4:
-        return project.images.filter(img => img.status === 'approved').length >= 2;
-      case 5:
-        return project.clips.filter(clip => clip.status === 'approved').length >= 2;
-      case 6:
-        return project.assembledVideo !== null;
-      case 7:
-        return true;
-      default:
-        return true;
+    if (mode === 'library') {
+      switch (currentStep) {
+        case 1: return project.title.trim() !== '';
+        case 2: return project.climaxEnd > project.climaxStart;
+        case 3: return (project.media || []).filter(m => m.status === 'approved').length >= 1;
+        case 4: return true; // Hooks are optional
+        case 5: return project.assembledVideo !== null;
+        case 6: return true;
+        default: return true;
+      }
+    } else {
+      switch (currentStep) {
+        case 1: return project.title.trim() !== '';
+        case 2: return project.climaxEnd > project.climaxStart;
+        case 3: return project.concept.prompts.some(p => p.trim() !== '');
+        case 4: return project.images.filter(img => img.status === 'approved').length >= 2;
+        case 5: return project.clips.filter(clip => clip.status === 'approved').length >= 2;
+        case 6: return project.assembledVideo !== null;
+        case 7: return true;
+        default: return true;
+      }
     }
   };
 
@@ -258,7 +293,7 @@ export default function NewVideo() {
     if (currentStep === 1 && !projectDbId) {
       await createProject();
     }
-    
+
     // Extract climax audio when leaving Step 2
     if (currentStep === 2 && projectDbId && project.audioFile) {
       try {
@@ -275,52 +310,90 @@ export default function NewVideo() {
       }
     }
 
-    // Save concept when leaving Step 3
-    if (currentStep === 3 && projectDbId) {
-      try {
-        await api.put(`/projects/${projectDbId}/concept`, { concept: project.concept });
-      } catch (err) {
-        console.error('Failed to save concept:', err);
+    if (mode === 'ai') {
+      // Save concept when leaving Step 3
+      if (currentStep === 3 && projectDbId) {
+        try {
+          await api.put(`/projects/${projectDbId}/concept`, { concept: project.concept });
+        } catch (err) {
+          console.error('Failed to save concept:', err);
+        }
+      }
+
+      // Save images when leaving Step 4
+      if (currentStep === 4 && projectDbId) {
+        try {
+          const imagesToSave = project.images.map(img => ({
+            id: img.id,
+            url: img.url || '',
+            prompt: img.prompt || '',
+            status: img.status || 'pending',
+            cost: img.cost || 0,
+            isUploaded: img.isUploaded || false,
+            imagePath: img.imagePath || '',
+          }));
+          await api.put(`/projects/${projectDbId}/images`, { images: imagesToSave });
+        } catch (err) {
+          console.error('Failed to save images:', err);
+        }
+      }
+
+      // Save clips when leaving Step 5
+      if (currentStep === 5 && projectDbId) {
+        try {
+          const clipsToSave = project.clips.map(clip => ({
+            id: clip.id,
+            imageId: clip.imageId || '',
+            clipUrl: clip.clipUrl || '',
+            clipPath: clip.clipPath || '',
+            duration: clip.duration || 0,
+            status: clip.status || 'pending',
+            cost: clip.cost || 0,
+          }));
+          await api.put(`/projects/${projectDbId}/clips`, { clips: clipsToSave });
+        } catch (err) {
+          console.error('Failed to save clips:', err);
+        }
+      }
+    } else if (mode === 'library') {
+      // Save media pool when leaving Step 3
+      if (currentStep === 3 && projectDbId) {
+        try {
+          await api.put(`/projects/${projectDbId}/media`, {
+            media: project.media.map(m => ({
+              id: m.id,
+              type: m.type,
+              thumbnailUrl: m.thumbnailUrl || '',
+              sourceUrl: m.sourceUrl || '',
+              localPath: m.localPath || '',
+              mediaUrl: m.mediaUrl || '',
+              duration: m.duration || 0,
+              animate: m.animate || false,
+              stillDuration: m.stillDuration || 4,
+              clipUrl: m.clipUrl || '',
+              clipPath: m.clipPath || '',
+              clipDuration: m.clipDuration || 0,
+              status: m.status || 'pending',
+              pexelsId: m.pexelsId || null,
+              filename: m.filename || '',
+            }))
+          });
+        } catch (err) {
+          console.error('Failed to save media:', err);
+        }
+      }
+
+      // Save concept (hooks) when leaving Step 4
+      if (currentStep === 4 && projectDbId) {
+        try {
+          await api.put(`/projects/${projectDbId}/concept`, { concept: project.concept });
+        } catch (err) {
+          console.error('Failed to save hooks:', err);
+        }
       }
     }
 
-    // Save images when leaving Step 4
-    if (currentStep === 4 && projectDbId) {
-      try {
-        const imagesToSave = project.images.map(img => ({
-          id: img.id,
-          url: img.url || '',
-          prompt: img.prompt || '',
-          status: img.status || 'pending',
-          cost: img.cost || 0,
-          isUploaded: img.isUploaded || false,
-          imagePath: img.imagePath || '',
-        }));
-        await api.put(`/projects/${projectDbId}/images`, { images: imagesToSave });
-      } catch (err) {
-        console.error('Failed to save images:', err);
-      }
-    }
-
-    // Save clips when leaving Step 5
-    if (currentStep === 5 && projectDbId) {
-      try {
-        const clipsToSave = project.clips.map(clip => ({
-          id: clip.id,
-          imageId: clip.imageId || '',
-          clipUrl: clip.clipUrl || '',
-          clipPath: clip.clipPath || '',
-          duration: clip.duration || 0,
-          status: clip.status || 'pending',
-          cost: clip.cost || 0,
-        }));
-        await api.put(`/projects/${projectDbId}/clips`, { clips: clipsToSave });
-      } catch (err) {
-        console.error('Failed to save clips:', err);
-      }
-    }
-    
-    if (currentStep < 7) {
+    if (currentStep < maxStep) {
       setCurrentStep(currentStep + 1);
     }
   };
@@ -338,6 +411,10 @@ export default function NewVideo() {
     navigate('/new');
   };
 
+  const handleModeSelect = (selectedMode) => {
+    updateProject({ mode: selectedMode });
+  };
+
   const renderStep = () => {
     const props = {
       project,
@@ -348,25 +425,57 @@ export default function NewVideo() {
       createProject,
     };
 
-    switch (currentStep) {
-      case 1: return <Step1SongInput {...props} />;
-      case 2: return <Step2SelectClimax {...props} />;
-      case 3: return <Step3VisualConcept {...props} />;
-      case 4: return <Step4GenerateImages {...props} />;
-      case 5: return <Step5AnimateClips {...props} />;
-      case 6: return <Step6AssembleVideo {...props} />;
-      case 7: return <Step7ExportPublish {...props} onCreateAnother={handleCreateAnother} />;
-      default: return null;
+    if (mode === 'library') {
+      switch (currentStep) {
+        case 1: return <Step1SongInput {...props} />;
+        case 2: return <Step2SelectClimax {...props} />;
+        case 3: return <StepMediaLibrary {...props} />;
+        case 4: return <StepHooksText {...props} />;
+        case 5: return <Step6AssembleVideo {...props} />;
+        case 6: return <Step7ExportPublish {...props} onCreateAnother={handleCreateAnother} />;
+        default: return null;
+      }
+    } else {
+      switch (currentStep) {
+        case 1: return <Step1SongInput {...props} />;
+        case 2: return <Step2SelectClimax {...props} />;
+        case 3: return <Step3VisualConcept {...props} />;
+        case 4: return <Step4GenerateImages {...props} />;
+        case 5: return <Step5AnimateClips {...props} />;
+        case 6: return <Step6AssembleVideo {...props} />;
+        case 7: return <Step7ExportPublish {...props} onCreateAnother={handleCreateAnother} />;
+        default: return null;
+      }
     }
   };
 
-  if (loading) {
+  // Show mode selection if no mode is set
+  if (!mode) {
     return (
-      <div className="min-h-screen bg-[#0c0c0f] flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-[#e94560] border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-[#0c0c0f] flex flex-col">
+        <header className="sticky top-0 z-50 bg-[#0c0c0f]/80 backdrop-blur-xl border-b border-[#2a2a35] px-4 md:px-6 py-4">
+          <div className="max-w-5xl mx-auto flex items-center gap-4">
+            <Link
+              to="/"
+              className="p-2 text-[#8b8b99] hover:text-[#f8f8f8] hover:bg-[#141418] rounded-lg transition-all"
+              data-testid="back-to-dashboard"
+            >
+              <ArrowLeft className="w-5 h-5" strokeWidth={1.5} />
+            </Link>
+            <div className="flex items-center gap-3">
+              <Video className="w-6 h-6 text-[#e94560]" strokeWidth={1.5} />
+              <h1 className="font-heading text-lg font-bold text-[#f8f8f8]">New Video</h1>
+            </div>
+          </div>
+        </header>
+        <main className="flex-1">
+          <ModeSelection onSelect={handleModeSelect} />
+        </main>
       </div>
     );
   }
+
+  const accentColor = mode === 'library' ? '#00b4d8' : '#e94560';
 
   return (
     <div className="min-h-screen bg-[#0c0c0f] flex flex-col">
@@ -381,10 +490,16 @@ export default function NewVideo() {
             <ArrowLeft className="w-5 h-5" strokeWidth={1.5} />
           </Link>
           <div className="flex items-center gap-3">
-            <Video className="w-6 h-6 text-[#e94560]" strokeWidth={1.5} />
+            <Video className="w-6 h-6" style={{ color: accentColor }} strokeWidth={1.5} />
             <h1 className="font-heading text-lg font-bold text-[#f8f8f8]">
               {project.title || 'New Video'}
             </h1>
+            <span className="px-2 py-0.5 text-[10px] font-medium rounded-full uppercase tracking-wider" style={{
+              background: `${accentColor}20`,
+              color: accentColor,
+            }}>
+              {mode === 'library' ? 'Library' : 'AI'}
+            </span>
           </div>
           {saving && (
             <span className="text-xs text-[#8b8b99] ml-auto">Saving...</span>
@@ -395,19 +510,20 @@ export default function NewVideo() {
       {/* Progress Bar */}
       <div className="bg-[#141418] border-b border-[#2a2a35] px-4 py-3 overflow-x-auto">
         <div className="max-w-5xl mx-auto">
-          <div className="flex items-center justify-between min-w-[600px]">
-            {STEPS.map((step, index) => (
+          <div className="flex items-center justify-between min-w-[500px]">
+            {steps.map((step, index) => (
               <React.Fragment key={step.id}>
                 <button
                   onClick={() => step.id <= currentStep && setCurrentStep(step.id)}
                   disabled={step.id > currentStep}
                   className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all ${
                     step.id === currentStep
-                      ? 'bg-[#e94560] text-white'
+                      ? 'text-white'
                       : step.id < currentStep
                       ? 'bg-[#10b981]/20 text-[#10b981] cursor-pointer hover:bg-[#10b981]/30'
                       : 'text-[#8b8b99] cursor-not-allowed'
                   }`}
+                  style={step.id === currentStep ? { background: accentColor } : undefined}
                   data-testid={`step-${step.id}`}
                 >
                   <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
@@ -417,7 +533,7 @@ export default function NewVideo() {
                   </span>
                   <span className="text-sm font-medium hidden md:inline">{step.shortName}</span>
                 </button>
-                {index < STEPS.length - 1 && (
+                {index < steps.length - 1 && (
                   <div className={`flex-1 h-0.5 mx-2 ${
                     step.id < currentStep ? 'bg-[#10b981]' : 'bg-[#2a2a35]'
                   }`} />
@@ -438,16 +554,14 @@ export default function NewVideo() {
       {/* Footer with Navigation and Cost */}
       <footer className="sticky bottom-0 bg-[#141418] border-t border-[#2a2a35] px-4 md:px-6 py-4">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
-          {/* Cost Counter */}
           <div className="flex items-center gap-2 bg-[#0c0c0f] px-4 py-2 rounded-lg border border-[#2a2a35]">
-            <DollarSign className="w-4 h-4 text-[#e94560]" strokeWidth={1.5} />
+            <DollarSign className="w-4 h-4" style={{ color: accentColor }} strokeWidth={1.5} />
             <span className="text-sm text-[#8b8b99]">Est. cost:</span>
-            <span className="font-heading font-semibold text-[#e94560]" data-testid="total-cost">
+            <span className="font-heading font-semibold" style={{ color: accentColor }} data-testid="total-cost">
               ${totalCost.toFixed(2)} USD
             </span>
           </div>
 
-          {/* Navigation Buttons */}
           <div className="flex items-center gap-3">
             {currentStep > 1 && (
               <button
@@ -459,11 +573,12 @@ export default function NewVideo() {
                 Back
               </button>
             )}
-            {currentStep < 7 && (
+            {currentStep < maxStep && (
               <button
                 onClick={handleNext}
                 disabled={!canProceed()}
-                className="flex items-center gap-2 px-4 py-2 bg-[#e94560] text-white rounded-lg hover:bg-[#f25a74] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ background: accentColor }}
                 data-testid="next-button"
               >
                 Next

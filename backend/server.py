@@ -250,6 +250,7 @@ class ProjectCreate(BaseModel):
     genre: Optional[str] = ""
     lyrics: Optional[str] = ""
     templateId: Optional[str] = None
+    mode: Optional[str] = "ai"  # "ai" or "library"
 
 class ProjectUpdate(BaseModel):
     title: Optional[str] = None
@@ -267,7 +268,7 @@ async def register(request: RegisterRequest, response: Response):
     user_doc = {
         "email": email,
         "password_hash": hashed,
-        "apiKeys": {"openai": "", "falai": "", "kling": "", "gemini": "", "together": ""},
+        "apiKeys": {"openai": "", "falai": "", "kling": "", "gemini": "", "together": "", "pexels": ""},
         "settings": {"imageProvider": "together-flux-dev", "videoProvider": "falai-wan"},
         "createdAt": datetime.now(timezone.utc).isoformat()
     }
@@ -446,7 +447,7 @@ async def save_api_key(data: ApiKeyUpdate, request: Request):
     user = await get_current_user(request)
     logger.info(f"[SETTINGS] save_api_key called by {user.get('email')} for provider: {data.provider}")
     provider = data.provider.lower()
-    if provider not in ["openai", "falai", "kling", "gemini", "together"]:
+    if provider not in ["openai", "falai", "kling", "gemini", "together", "pexels"]:
         raise HTTPException(status_code=400, detail="Invalid provider")
     
     encrypted = encrypt_api_key(data.apiKey)
@@ -465,7 +466,8 @@ async def get_api_keys(request: Request):
     return {
         "openai": bool(api_keys.get("openai")),
         "falai": bool(api_keys.get("falai")),
-        "kling": bool(api_keys.get("kling"))
+        "kling": bool(api_keys.get("kling")),
+        "pexels": bool(api_keys.get("pexels"))
     }
 
 @api_router.post("/settings/providers")
@@ -515,13 +517,342 @@ async def add_cost_log(request: Request, data: dict):
     await db.cost_logs.insert_one(log_doc)
     return {"success": True}
 
+# ========================================
+# STOCK MEDIA SEARCH (Pexels Proxy)
+# ========================================
+
+DEFAULT_PEXELS_KEY = os.environ.get("PEXELS_API_KEY", "")
+
+async def get_pexels_key(user_id: str) -> str:
+    """Get Pexels API key - user's own key takes priority, then app-wide default."""
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if user:
+        encrypted = user.get("apiKeys", {}).get("pexels", "")
+        if encrypted:
+            key = decrypt_api_key(encrypted)
+            if key:
+                return key
+    return DEFAULT_PEXELS_KEY
+
+@api_router.get("/stock/search/photos")
+async def search_stock_photos(request: Request, query: str, page: int = 1, per_page: int = 20):
+    user = await get_current_user(request)
+    pexels_key = await get_pexels_key(user["_id"])
+    if not pexels_key:
+        raise HTTPException(status_code=400, detail="No Pexels API key configured. Add one in Settings or contact the admin.")
+
+    async with httpx.AsyncClient() as client_http:
+        resp = await client_http.get(
+            "https://api.pexels.com/v1/search",
+            params={"query": query, "page": page, "per_page": per_page, "orientation": "portrait"},
+            headers={"Authorization": pexels_key},
+            timeout=15
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail="Pexels API error")
+        data = resp.json()
+
+    photos = []
+    for p in data.get("photos", []):
+        photos.append({
+            "id": f"pexels-photo-{p['id']}",
+            "pexelsId": p["id"],
+            "type": "stock-photo",
+            "thumbnailUrl": p.get("src", {}).get("medium", ""),
+            "sourceUrl": p.get("src", {}).get("large2x", p.get("src", {}).get("original", "")),
+            "width": p.get("width", 0),
+            "height": p.get("height", 0),
+            "photographer": p.get("photographer", ""),
+            "pexelsUrl": p.get("url", ""),
+        })
+
+    return {
+        "photos": photos,
+        "page": data.get("page", page),
+        "totalResults": data.get("total_results", 0),
+        "hasMore": page * per_page < data.get("total_results", 0)
+    }
+
+@api_router.get("/stock/search/videos")
+async def search_stock_videos(request: Request, query: str, page: int = 1, per_page: int = 15):
+    user = await get_current_user(request)
+    pexels_key = await get_pexels_key(user["_id"])
+    if not pexels_key:
+        raise HTTPException(status_code=400, detail="No Pexels API key configured. Add one in Settings or contact the admin.")
+
+    async with httpx.AsyncClient() as client_http:
+        resp = await client_http.get(
+            "https://api.pexels.com/videos/search",
+            params={"query": query, "page": page, "per_page": per_page, "orientation": "portrait"},
+            headers={"Authorization": pexels_key},
+            timeout=15
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail="Pexels API error")
+        data = resp.json()
+
+    videos = []
+    for v in data.get("videos", []):
+        # Pick best HD video file
+        video_files = v.get("video_files", [])
+        best_file = None
+        for vf in sorted(video_files, key=lambda x: x.get("height", 0), reverse=True):
+            if vf.get("file_type") == "video/mp4":
+                best_file = vf
+                break
+        if not best_file and video_files:
+            best_file = video_files[0]
+
+        videos.append({
+            "id": f"pexels-video-{v['id']}",
+            "pexelsId": v["id"],
+            "type": "stock-video",
+            "thumbnailUrl": v.get("image", ""),
+            "sourceUrl": best_file.get("link", "") if best_file else "",
+            "width": best_file.get("width", 0) if best_file else 0,
+            "height": best_file.get("height", 0) if best_file else 0,
+            "duration": v.get("duration", 0),
+            "user": v.get("user", {}).get("name", ""),
+            "pexelsUrl": v.get("url", ""),
+        })
+
+    return {
+        "videos": videos,
+        "page": data.get("page", page),
+        "totalResults": data.get("total_results", 0),
+        "hasMore": page * per_page < data.get("total_results", 0)
+    }
+
+# ========================================
+# MEDIA MANAGEMENT (Library Mode)
+# ========================================
+
+@api_router.post("/projects/{project_id}/media/upload")
+async def upload_media(project_id: str, request: Request, file: UploadFile = File(...)):
+    """Upload image or video to the project media pool."""
+    user = await get_current_user(request)
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    media_dir = PROJECTS_DIR / project_id / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = Path(file.filename).suffix.lower()
+    is_video = ext in [".mp4", ".mov", ".avi", ".webm", ".mkv"]
+    is_image = ext in [".jpg", ".jpeg", ".png", ".webp", ".gif"]
+    if not is_video and not is_image:
+        raise HTTPException(status_code=400, detail="Unsupported file type. Use images (jpg/png/webp) or videos (mp4/mov).")
+
+    file_id = str(uuid.uuid4())[:8]
+    filename = f"{file_id}{ext}"
+    file_path = media_dir / filename
+
+    async with aiofiles.open(file_path, 'wb') as f:
+        content = await file.read()
+        await f.write(content)
+
+    media_type = "upload-video" if is_video else "upload-image"
+    duration = 0
+    if is_video:
+        try:
+            probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                        '-of', 'default=noprint_wrappers=1:nokey=1', str(file_path)]
+            probe_result = await asyncio.to_thread(subprocess.run, probe_cmd, capture_output=True, text=True)
+            if probe_result.returncode == 0 and probe_result.stdout.strip():
+                duration = round(float(probe_result.stdout.strip()), 1)
+        except Exception:
+            pass
+
+    return {
+        "id": file_id,
+        "type": media_type,
+        "filename": file.filename,
+        "localPath": str(file_path),
+        "mediaUrl": f"/api/projects/{project_id}/media/{filename}",
+        "duration": duration,
+    }
+
+@api_router.get("/projects/{project_id}/media/{filename}")
+async def serve_media(project_id: str, filename: str, request: Request):
+    """Serve media files for the project."""
+    await get_current_user(request)
+    file_path = PROJECTS_DIR / project_id / "media" / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Media file not found")
+    return FileResponse(str(file_path))
+
+@api_router.post("/projects/{project_id}/media/download-stock")
+async def download_stock_media(project_id: str, request: Request, data: dict):
+    """Download a stock photo/video from Pexels into the project's media folder."""
+    user = await get_current_user(request)
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    source_url = data.get("sourceUrl")
+    media_type = data.get("type", "stock-photo")
+    if not source_url:
+        raise HTTPException(status_code=400, detail="sourceUrl is required")
+
+    media_dir = PROJECTS_DIR / project_id / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    file_id = str(uuid.uuid4())[:8]
+    ext = ".mp4" if "video" in media_type else ".jpg"
+    filename = f"{file_id}{ext}"
+    file_path = media_dir / filename
+
+    async with httpx.AsyncClient(follow_redirects=True) as client_http:
+        resp = await client_http.get(source_url, timeout=60)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to download stock media")
+        async with aiofiles.open(file_path, 'wb') as f:
+            await f.write(resp.content)
+
+    duration = 0
+    if "video" in media_type:
+        try:
+            probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                        '-of', 'default=noprint_wrappers=1:nokey=1', str(file_path)]
+            probe_result = await asyncio.to_thread(subprocess.run, probe_cmd, capture_output=True, text=True)
+            if probe_result.returncode == 0 and probe_result.stdout.strip():
+                duration = round(float(probe_result.stdout.strip()), 1)
+        except Exception:
+            pass
+
+    return {
+        "id": file_id,
+        "localPath": str(file_path),
+        "mediaUrl": f"/api/projects/{project_id}/media/{filename}",
+        "duration": duration,
+    }
+
+@api_router.post("/projects/{project_id}/media/still-to-clip")
+async def still_to_clip(project_id: str, request: Request, data: dict):
+    """Convert a still image into a video clip of specified duration using FFmpeg."""
+    user = await get_current_user(request)
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    image_path = data.get("imagePath")
+    duration = data.get("duration", 4)
+    duration = max(2, min(8, duration))  # clamp 2-8s
+
+    if not image_path or not Path(image_path).exists():
+        raise HTTPException(status_code=400, detail="Image file not found")
+
+    clips_dir = PROJECTS_DIR / project_id / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    clip_id = str(uuid.uuid4())[:8]
+    output_path = clips_dir / f"still_{clip_id}.mp4"
+
+    # Ken Burns effect: gentle zoom + pan for a non-static feel
+    cmd = [
+        'ffmpeg', '-y',
+        '-loop', '1', '-i', str(image_path),
+        '-vf', f'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z=\'min(zoom+0.0015,1.3)\':x=\'iw/2-(iw/zoom/2)\':y=\'ih/2-(ih/zoom/2)\':d={int(duration*30)}:s=1080x1920:fps=30',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-t', str(duration), '-pix_fmt', 'yuv420p',
+        str(output_path)
+    ]
+
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error(f"Still-to-clip failed: {result.stderr[:500]}")
+        # Simpler fallback without zoompan
+        cmd_fallback = [
+            'ffmpeg', '-y', '-loop', '1', '-i', str(image_path),
+            '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+            '-t', str(duration), '-pix_fmt', 'yuv420p', '-r', '30',
+            str(output_path)
+        ]
+        result = await asyncio.to_thread(subprocess.run, cmd_fallback, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail="Failed to convert image to clip")
+
+    return {
+        "clipId": clip_id,
+        "clipUrl": f"/api/projects/{project_id}/clips/still_{clip_id}.mp4",
+        "clipPath": str(output_path),
+        "duration": duration,
+    }
+
+@api_router.post("/projects/{project_id}/media/trim-video")
+async def trim_video(project_id: str, request: Request, data: dict):
+    """Trim a video to specified duration, resizing for 9:16 vertical format."""
+    user = await get_current_user(request)
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    video_path = data.get("videoPath")
+    max_duration = data.get("maxDuration", 30)
+
+    if not video_path or not Path(video_path).exists():
+        raise HTTPException(status_code=400, detail="Video file not found")
+
+    clips_dir = PROJECTS_DIR / project_id / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+
+    clip_id = str(uuid.uuid4())[:8]
+    output_path = clips_dir / f"trimmed_{clip_id}.mp4"
+
+    cmd = [
+        'ffmpeg', '-y', '-i', str(video_path),
+        '-t', str(max_duration),
+        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-r', '30', '-an',
+        str(output_path)
+    ]
+
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error(f"Video trim failed: {result.stderr[:500]}")
+        raise HTTPException(status_code=500, detail="Failed to trim video")
+
+    # Get actual duration
+    actual_duration = max_duration
+    try:
+        probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                    '-of', 'default=noprint_wrappers=1:nokey=1', str(output_path)]
+        probe_result = await asyncio.to_thread(subprocess.run, probe_cmd, capture_output=True, text=True)
+        if probe_result.returncode == 0 and probe_result.stdout.strip():
+            actual_duration = round(float(probe_result.stdout.strip()), 1)
+    except Exception:
+        pass
+
+    return {
+        "clipId": clip_id,
+        "clipUrl": f"/api/projects/{project_id}/clips/trimmed_{clip_id}.mp4",
+        "clipPath": str(output_path),
+        "duration": actual_duration,
+    }
+
+@api_router.put("/projects/{project_id}/media")
+async def update_project_media(project_id: str, request: Request, data: dict):
+    """Save the media pool state for a library-mode project."""
+    user = await get_current_user(request)
+    media = data.get("media", [])
+    result = await db.projects.update_one(
+        {"_id": ObjectId(project_id), "userId": user["_id"]},
+        {"$set": {"media": media}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"success": True}
+
 # Project Endpoints
 @api_router.get("/projects")
 async def get_projects(request: Request):
     user = await get_current_user(request)
     projects = await db.projects.find(
         {"userId": user["_id"]},
-        {"_id": 1, "title": 1, "status": 1, "totalCost": 1, "createdAt": 1, "images": 1, "finalVideoPath": 1}
+        {"_id": 1, "title": 1, "status": 1, "totalCost": 1, "createdAt": 1, "images": 1, "finalVideoPath": 1, "mode": 1}
     ).sort("createdAt", -1).to_list(100)
     
     for p in projects:
@@ -538,6 +869,7 @@ async def create_project(data: ProjectCreate, request: Request):
         "genre": data.genre,
         "lyrics": data.lyrics,
         "templateId": data.templateId,
+        "mode": data.mode or "ai",
         "status": "draft",
         "audioOriginalPath": "",
         "audioClimaxPath": "",
@@ -546,6 +878,7 @@ async def create_project(data: ProjectCreate, request: Request):
         "concept": {"theme": "", "mood": "", "palette": [], "prompts": [], "hooks": []},
         "images": [],
         "clips": [],
+        "media": [],
         "finalVideoPath": "",
         "selectedHook": "",
         "totalCost": 0,
@@ -1936,6 +2269,7 @@ class AssembleVideoRequest(BaseModel):
     hookTexts: Optional[List[str]] = None
     addSubtitles: bool = False
     lyrics: Optional[str] = None
+    libraryClipPaths: Optional[List[str]] = None  # For library mode
 
 async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, project: dict):
     """Background task: runs FFmpeg assembly and updates job status."""
@@ -1946,10 +2280,17 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         final_dir.mkdir(parents=True, exist_ok=True)
 
         clip_paths = []
-        for idx in data.clipOrder:
-            clip_path = clips_dir / f"clip_{idx}.mp4"
-            if clip_path.exists():
-                clip_paths.append(str(clip_path))
+        if data.libraryClipPaths:
+            # Library mode: use pre-prepared clip paths
+            for p in data.libraryClipPaths:
+                if Path(p).exists():
+                    clip_paths.append(p)
+        else:
+            # AI mode: use clip indices
+            for idx in data.clipOrder:
+                clip_path = clips_dir / f"clip_{idx}.mp4"
+                if clip_path.exists():
+                    clip_paths.append(str(clip_path))
 
         if len(clip_paths) < 1:
             job.update({"status": "failed", "error": "No valid clips found on disk"})
@@ -2183,8 +2524,11 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Quick validation before starting background job
-    clips_dir = PROJECTS_DIR / data.projectId / "clips"
-    clip_count = sum(1 for idx in data.clipOrder if (clips_dir / f"clip_{idx}.mp4").exists())
+    if data.libraryClipPaths:
+        clip_count = sum(1 for p in data.libraryClipPaths if Path(p).exists())
+    else:
+        clips_dir = PROJECTS_DIR / data.projectId / "clips"
+        clip_count = sum(1 for idx in data.clipOrder if (clips_dir / f"clip_{idx}.mp4").exists())
     if clip_count < 1:
         raise HTTPException(status_code=400, detail="Need at least 1 clip to assemble video")
 

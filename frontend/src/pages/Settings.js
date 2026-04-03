@@ -16,9 +16,9 @@ import { Label } from '../components/ui/label';
 
 export default function Settings() {
   const { refreshUser } = useAuth();
-  const [apiKeys, setApiKeys] = useState({ openai: false, falai: false, kling: false, gemini: false, together: false });
-  const [apiKeyInputs, setApiKeyInputs] = useState({ openai: '', falai: '', kling: '', gemini: '', together: '' });
-  const [showKeys, setShowKeys] = useState({ openai: false, falai: false, kling: false, gemini: false, together: false });
+  const [apiKeys, setApiKeys] = useState({ openai: false, falai: false, kling: false, gemini: false, together: false, pexels: false });
+  const [apiKeyInputs, setApiKeyInputs] = useState({ openai: '', falai: '', kling: '', gemini: '', together: '', pexels: '' });
+  const [showKeys, setShowKeys] = useState({ openai: false, falai: false, kling: false, gemini: false, together: false, pexels: false });
   const [savingKey, setSavingKey] = useState('');
   const [settings, setSettings] = useState({ imageProvider: 'together-flux-dev', videoProvider: 'falai-wan' });
   const [costLogs, setCostLogs] = useState([]);
@@ -139,6 +139,7 @@ export default function Settings() {
               { key: 'together', label: 'Together AI API Key', hint: 'Cheapest images (FLUX)' },
               { key: 'gemini', label: 'Google Gemini API Key', hint: 'Free 500 imgs/day in AI Studio' },
               { key: 'falai', label: 'FAL.AI API Key', hint: 'For video animation' },
+              { key: 'pexels', label: 'Pexels API Key', hint: 'Stock photos & videos (free at pexels.com/api). Optional — app default available.' },
             ].map(({ key, label, hint }) => (
               <div key={key} className="space-y-2">
                 <div className="flex items-center justify-between">
