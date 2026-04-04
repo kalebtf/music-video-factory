@@ -3,52 +3,48 @@
 ## Original Problem Statement
 Build a full-stack web app called "Music Video Factory" for creating short music videos for TikTok/Shorts.
 - Tech: React + FastAPI (Python) + MongoDB
-- Design: Dark theme (#0c0c0f bg, #141418 cards, #e94560 accent for AI mode, #00b4d8 for Library mode)
+- Design: Dark theme (#0c0c0f bg, #141418 cards, #e94560 AI accent, #00b4d8 Library accent)
 
 ## What's Been Implemented
 
-### Phase 0 - Foundation (Done)
-- [x] JWT Auth (localStorage + Bearer token)
-- [x] Dashboard with stats, project grid, hover actions, delete modal, mode badges (AI/LIB)
-- [x] Settings: 6 API key providers (OpenAI, Together, Gemini, FAL.AI, Kling, Pexels)
-- [x] Centralized axios with interceptors
+### Foundation (Done)
+- [x] JWT Auth, Dashboard, Settings (6 API keys incl Pexels), Centralized axios
 
-### Phase 1 - Split-Path Wizard (Done)
-- [x] Mode Selection Screen at /new
-- [x] Dynamic wizard steps based on mode (AI: 7 steps, Library: 6 steps)
+### Split-Path Wizard (Done)
+- [x] Mode Selection Screen (AI Mode / Library Mode)
+- [x] Dynamic wizard steps (AI: 7 steps, Library: 6 steps)
 
-### AI Mode Steps (Done):
-- [x] Step 1: Song Input (drag-drop, Smart Import, AI parsing, lyrics cleaning)
-- [x] Step 2: Select Climax (WaveSurfer v7 regions, 24px handles, time labels, Play Selection)
-- [x] Step 3: Visual Concept (AI analysis, character presence, Spanish hooks / English prompts)
-- [x] Step 4: Generate Images (AI gen, upload, style reference, Approve/Reject All)
-- [x] Step 5: Animate Clips (Animate All, Approve/Reject All)
-- [x] Step 6: Assemble (async background job, polling, subtitle cap)
-- [x] Step 7: Export (platform downloads, ZIP)
+### AI Mode (Done)
+- [x] Song Input, Climax (WaveSurfer v7 + large handles), Visual Concept, Generate Images, Animate Clips, Assemble (async), Export
 
-### Library Mode Steps (Done):
-- [x] Step 1: Song Input (shared)
-- [x] Step 2: Select Climax (shared, improved UX)
-- [x] Step 3: Media Library
-  - AI Image Prompts section (7 prompts via GPT-4o-mini, copy buttons, persisted to DB)
-  - Stock Search tab (Pexels photos + videos)
-  - My Uploads tab (drag-drop images + videos)
-  - Media Pool with drag-and-drop reorder, animate toggle, duration slider
-- [x] Step 4: Hooks & Text (AI + manual hooks, optional)
-- [x] Step 5: Assemble (same engine, mixed media)
-- [x] Step 6: Export
+### Library Mode (Done)
+- [x] Song Input, Climax, Media Library (Pexels search + uploads + AI prompts), Hooks & Text, Assemble, Export
 
-### Bug Fixes (Done):
-- [x] Lyrics cleaning: removes [brackets] and (parentheses) from imported .txt files
-- [x] Extract climax: fixed stale projectId state in handleNext
-- [x] Stock search / media upload: added ensureProject safety net and error display
+### Phase 2: Metadata Generation (Done)
+- [x] "Generate for All Platforms" button in Step 7 Export
+- [x] GPT-4o-mini generates: title (Spanish + emojis), description (Spanish), hashtags (15-20 mix), best posting time
+- [x] 4 platform tabs: TikTok, YouTube Shorts, Instagram Reels, Facebook Reels
+- [x] All fields are editable after generation
+- [x] Copy All button per platform (copies title + description + hashtags)
+- [x] Generate Thumbnail per platform using GPT Image ($0.005 each)
+  - TikTok: 1024x1536 vertical, bold text
+  - YouTube: 1536x1024 horizontal, clickbait
+  - Instagram: 1024x1024 square, aesthetic
+  - Facebook: 1536x1024 horizontal, emotional
+- [x] Download button per thumbnail
+- [x] All metadata + thumbnails saved to MongoDB
+
+### Backend Endpoints (Metadata)
+- POST /api/ai/generate-metadata — GPT-4o-mini, ~$0.01
+- POST /api/ai/generate-thumbnail — GPT Image, ~$0.005/thumbnail
+- GET /api/projects/{id}/thumbnails/{filename} — serve thumbnail files
 
 ## Test Credentials
 - Email: test@example.com | Password: test123456
 
 ## Next Tasks / Backlog
-- [ ] Phase 2: Metadata generation (platform-specific titles, descriptions, hashtags)
-- [ ] Editable output per platform (TikTok, YouTube, Instagram, Facebook)
 - [ ] Exact subtitle sync via Whisper (word-level timestamps)
-- [ ] Manual video trim in/out selection
+- [ ] Manual video trim in/out selection for stock clips
 - [ ] Refactor server.py into route modules (deferred)
+- [ ] Direct publishing to TikTok, YouTube, Instagram (future)
+- [ ] Kling API integration (future)
