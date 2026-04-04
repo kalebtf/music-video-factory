@@ -290,38 +290,46 @@ export default function NewVideo() {
   };
 
   const handleNext = async () => {
+    let activeProjectId = projectDbId;
+
     if (currentStep === 1 && !projectDbId) {
-      await createProject();
+      activeProjectId = await createProject();
+      if (!activeProjectId) return; // creation failed
     }
 
     // Extract climax audio when leaving Step 2
-    if (currentStep === 2 && projectDbId && project.audioFile) {
+    // Fire if we have a project AND there is audio (either in-memory File or already on disk)
+    if (currentStep === 2 && activeProjectId) {
       try {
         await api.post(
-          `/audio/extract-climax/${projectDbId}`,
+          `/audio/extract-climax/${activeProjectId}`,
           {
-            projectId: projectDbId,
+            projectId: activeProjectId,
             start: project.climaxStart,
             end: project.climaxEnd
           }
         );
       } catch (err) {
-        console.error('Failed to extract climax:', err);
+        // 400 "No audio file uploaded" is expected if user hasn't uploaded audio yet
+        const detail = err.response?.data?.detail || '';
+        if (!detail.includes('No audio file')) {
+          console.error('Failed to extract climax:', err);
+        }
       }
     }
 
     if (mode === 'ai') {
       // Save concept when leaving Step 3
-      if (currentStep === 3 && projectDbId) {
+      if (currentStep === 3 && activeProjectId) {
         try {
-          await api.put(`/projects/${projectDbId}/concept`, { concept: project.concept });
+          await api.put(`/projects/${activeProjectId}/concept`, { concept: project.concept });
         } catch (err) {
           console.error('Failed to save concept:', err);
         }
       }
 
       // Save images when leaving Step 4
-      if (currentStep === 4 && projectDbId) {
+      if (currentStep === 4 && activeProjectId) {
         try {
           const imagesToSave = project.images.map(img => ({
             id: img.id,
@@ -332,14 +340,14 @@ export default function NewVideo() {
             isUploaded: img.isUploaded || false,
             imagePath: img.imagePath || '',
           }));
-          await api.put(`/projects/${projectDbId}/images`, { images: imagesToSave });
+          await api.put(`/projects/${activeProjectId}/images`, { images: imagesToSave });
         } catch (err) {
           console.error('Failed to save images:', err);
         }
       }
 
       // Save clips when leaving Step 5
-      if (currentStep === 5 && projectDbId) {
+      if (currentStep === 5 && activeProjectId) {
         try {
           const clipsToSave = project.clips.map(clip => ({
             id: clip.id,
@@ -350,16 +358,16 @@ export default function NewVideo() {
             status: clip.status || 'pending',
             cost: clip.cost || 0,
           }));
-          await api.put(`/projects/${projectDbId}/clips`, { clips: clipsToSave });
+          await api.put(`/projects/${activeProjectId}/clips`, { clips: clipsToSave });
         } catch (err) {
           console.error('Failed to save clips:', err);
         }
       }
     } else if (mode === 'library') {
       // Save media pool when leaving Step 3
-      if (currentStep === 3 && projectDbId) {
+      if (currentStep === 3 && activeProjectId) {
         try {
-          await api.put(`/projects/${projectDbId}/media`, {
+          await api.put(`/projects/${activeProjectId}/media`, {
             media: project.media.map(m => ({
               id: m.id,
               type: m.type,
@@ -384,9 +392,9 @@ export default function NewVideo() {
       }
 
       // Save concept (hooks) when leaving Step 4
-      if (currentStep === 4 && projectDbId) {
+      if (currentStep === 4 && activeProjectId) {
         try {
-          await api.put(`/projects/${projectDbId}/concept`, { concept: project.concept });
+          await api.put(`/projects/${activeProjectId}/concept`, { concept: project.concept });
         } catch (err) {
           console.error('Failed to save hooks:', err);
         }

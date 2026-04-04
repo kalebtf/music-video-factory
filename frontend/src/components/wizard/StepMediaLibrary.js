@@ -6,7 +6,7 @@ import {
 import api from '../../lib/api';
 import { AuthImage, AuthVideo } from '../AuthImage';
 
-export default function StepMediaLibrary({ project, updateProject, projectId }) {
+export default function StepMediaLibrary({ project, updateProject, projectId, createProject }) {
   const [activeTab, setActiveTab] = useState('stock');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchType, setSearchType] = useState('photos'); // photos | videos
@@ -17,9 +17,19 @@ export default function StepMediaLibrary({ project, updateProject, projectId }) 
   const [uploading, setUploading] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [processingItems, setProcessingItems] = useState(new Set());
+  const [error, setError] = useState('');
   const fileInputRef = useRef(null);
 
   const media = project.media || [];
+
+  const ensureProject = async () => {
+    if (projectId) return projectId;
+    if (createProject) {
+      const id = await createProject();
+      return id;
+    }
+    return null;
+  };
 
   const updateMedia = useCallback((newMedia) => {
     updateProject({ media: newMedia });
@@ -29,6 +39,7 @@ export default function StepMediaLibrary({ project, updateProject, projectId }) 
   const handleSearch = async (page = 1) => {
     if (!searchQuery.trim()) return;
     setSearching(true);
+    setError('');
     try {
       const endpoint = searchType === 'videos' ? '/stock/search/videos' : '/stock/search/photos';
       const { data } = await api.get(endpoint, {
@@ -44,6 +55,8 @@ export default function StepMediaLibrary({ project, updateProject, projectId }) 
       setHasMoreResults(data.hasMore);
     } catch (err) {
       console.error('Stock search failed:', err);
+      const detail = err.response?.data?.detail || 'Search failed. Check your Pexels API key in Settings.';
+      setError(detail);
     } finally {
       setSearching(false);
     }
@@ -52,9 +65,15 @@ export default function StepMediaLibrary({ project, updateProject, projectId }) 
   const handleAddStock = async (item) => {
     if (media.some(m => m.id === item.id)) return; // already added
     setProcessingItems(prev => new Set([...prev, item.id]));
+    setError('');
     try {
+      const pid = await ensureProject();
+      if (!pid) {
+        setError('Project not created yet. Please go back to Step 1 and enter a title.');
+        return;
+      }
       // Download to server
-      const { data } = await api.post(`/projects/${projectId}/media/download-stock`, {
+      const { data } = await api.post(`/projects/${pid}/media/download-stock`, {
         sourceUrl: item.sourceUrl,
         type: item.type,
       });
@@ -91,7 +110,13 @@ export default function StepMediaLibrary({ project, updateProject, projectId }) 
 
   // ---- File Upload ----
   const handleUpload = async (files) => {
-    if (!projectId || !files.length) return;
+    if (!files.length) return;
+    setError('');
+    const pid = await ensureProject();
+    if (!pid) {
+      setError('Project not created yet. Please go back to Step 1 and enter a title.');
+      return;
+    }
     setUploading(true);
 
     for (const file of files) {
@@ -99,7 +124,7 @@ export default function StepMediaLibrary({ project, updateProject, projectId }) 
         const formData = new FormData();
         formData.append('file', file);
         const { data } = await api.post(
-          `/projects/${projectId}/media/upload`,
+          `/projects/${pid}/media/upload`,
           formData,
           { headers: { 'Content-Type': 'multipart/form-data' } }
         );
@@ -194,6 +219,12 @@ export default function StepMediaLibrary({ project, updateProject, projectId }) 
         <h2 className="font-heading text-2xl font-bold text-[#f8f8f8] mb-2">Media Library</h2>
         <p className="text-[#8b8b99]">Search stock media, upload your own, then arrange your clips</p>
       </div>
+
+      {error && (
+        <div className="bg-[#ef4444]/10 border border-[#ef4444]/30 text-[#ef4444] px-4 py-3 rounded-lg text-sm" data-testid="media-library-error">
+          {error}
+        </div>
+      )}
 
       {/* Tab Switcher */}
       <div className="flex gap-1 bg-[#0c0c0f] rounded-xl p-1 border border-[#2a2a35]">

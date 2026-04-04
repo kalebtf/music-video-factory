@@ -2713,6 +2713,15 @@ async def startup():
     await db.templates.create_index("userId")
     logger.info("Database indexes created")
 
+    # Log registered routes for debugging
+    routes = []
+    for route in app.routes:
+        if hasattr(route, 'methods') and hasattr(route, 'path'):
+            routes.append(f"  {','.join(route.methods)} {route.path}")
+    logger.info(f"Registered {len(routes)} API routes:")
+    for r in sorted(routes):
+        logger.info(r)
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()

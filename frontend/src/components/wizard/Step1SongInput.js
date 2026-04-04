@@ -55,6 +55,18 @@ export default function Step1SongInput({ project, updateProject, templates }) {
     updateProject({ uploadedImages: project.uploadedImages.filter(img => img.id !== id) });
   };
 
+  // Clean lyrics: remove text in brackets [like this] and parentheses (like this)
+  const cleanLyrics = (text) => {
+    if (!text) return '';
+    return text
+      .replace(/\[.*?\]/g, '')   // Remove [bracketed text]
+      .replace(/\(.*?\)/g, '')   // Remove (parenthetical text)
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .join('\n');
+  };
+
   const parseTextBasic = (text) => {
     const lines = text.split('\n');
     const updates = {};
@@ -88,14 +100,14 @@ export default function Step1SongInput({ project, updateProject, templates }) {
         lyricsLines = lines.slice(startIdx);
       }
     }
-    if (lyricsLines.length > 0) updates.lyrics = lyricsLines.join('\n').trim();
+    if (lyricsLines.length > 0) updates.lyrics = cleanLyrics(lyricsLines.join('\n'));
     return updates;
   };
 
   const parseTextWithAI = async (text) => {
     try {
       const { data } = await api.post('/ai/parse-song-info', { text });
-      return { title: data.title || '', genre: data.genre || '', lyrics: data.lyrics || '' };
+      return { title: data.title || '', genre: data.genre || '', lyrics: cleanLyrics(data.lyrics || '') };
     } catch (err) {
       console.error('AI parsing failed:', err);
       return null;
