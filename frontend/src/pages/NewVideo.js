@@ -66,6 +66,8 @@ const initialProjectState = {
   clips: [],
   media: [], // Library mode media pool
   imagePrompts: [], // Library mode AI prompts for external use
+  metadata: {}, // Platform-specific metadata (TikTok/YouTube/IG/FB)
+  thumbnails: {}, // Platform thumbnails
   assembledVideo: null,
   assemblySettings: {
     crossfade: 0.5,
@@ -161,6 +163,8 @@ export default function NewVideo() {
         clips: loadedClips,
         media: data.media || [],
         imagePrompts: data.imagePrompts || [],
+        metadata: data.metadata || {},
+        thumbnails: data.thumbnails || {},
         assembledVideo: data.finalVideoPath ? {
           url: `/api/projects/${id}/final/video.mp4`,
           duration: 0,

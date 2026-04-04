@@ -1497,6 +1497,253 @@ Return ONLY valid JSON (no markdown, no code blocks):
         raise HTTPException(status_code=500, detail=f"Failed to generate prompts: {str(e)}")
 
 
+@api_router.post("/ai/generate-metadata")
+async def generate_metadata(data: dict, request: Request):
+    """Generate platform-specific metadata (title, description, hashtags) for TikTok/YouTube/IG/FB."""
+    user = await get_current_user(request)
+    logger.info(f"[AI] generate-metadata called by {user.get('email')}")
+
+    openai_key = await get_user_openai_key(user["_id"])
+    if not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not configured. Please add it in Settings.")
+
+    title = data.get("title", "")
+    genre = data.get("genre", "")
+    lyrics = data.get("lyrics", "")
+    hooks = data.get("hooks", [])
+    project_id = data.get("projectId", "")
+
+    hooks_text = "\n".join(f'- "{h}"' for h in hooks) if hooks else "No hooks selected."
+
+    try:
+        async with httpx.AsyncClient() as client_http:
+            response = await client_http.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": """You are a social media marketing expert for Latin music content creators.
+
+Generate metadata for 4 platforms. ALL titles, descriptions, and hashtags must be in SPANISH (include some trending English hashtags too).
+
+Return ONLY valid JSON (no markdown, no code blocks):
+{
+  "tiktok": {
+    "title": "short catchy title with 1-2 emojis in Spanish",
+    "description": "2-3 line emotional caption in Spanish with emojis, hooks, and call to action",
+    "hashtags": "#tag1 #tag2 ... (15-20 tags, mix trending Spanish + English + niche + song-specific)",
+    "bestTime": "Day and hour range for Mexican/Latin audience, e.g. 'Viernes 7-9 PM CST'"
+  },
+  "youtube": {
+    "title": "short catchy title with 1-2 emojis in Spanish",
+    "description": "2-3 line emotional caption in Spanish with emojis",
+    "hashtags": "#tag1 #tag2 ... (15-20 tags)",
+    "bestTime": "Day and hour range"
+  },
+  "instagram": {
+    "title": "short catchy title with 1-2 emojis in Spanish",
+    "description": "2-3 line emotional caption in Spanish with emojis",
+    "hashtags": "#tag1 #tag2 ... (15-20 tags)",
+    "bestTime": "Day and hour range"
+  },
+  "facebook": {
+    "title": "short catchy title with 1-2 emojis in Spanish",
+    "description": "2-3 line emotional caption in Spanish with emojis",
+    "hashtags": "#tag1 #tag2 ... (15-20 tags)",
+    "bestTime": "Day and hour range"
+  }
+}
+
+Rules:
+- Titles max 60 chars with 1-2 relevant emojis
+- Descriptions: 2-3 lines, emotional, include hooks from the song, end with a call to action
+- Hashtags: mix of trending Spanish music hashtags, trending English hashtags, genre-specific, and song-specific
+- Best time: specific to Mexican/Latin American timezone (CST/CDT)
+- Each platform should have SLIGHTLY different tone: TikTok=casual/fun, YouTube=descriptive, Instagram=aesthetic, Facebook=emotional/shareable"""
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Song: {title}\nGenre: {genre}\nHooks:\n{hooks_text}\n\nLyrics (excerpt):\n{lyrics[:1500]}"
+                        }
+                    ],
+                    "temperature": 0.8,
+                    "max_tokens": 2000,
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            result = response.json()
+            content = result["choices"][0]["message"]["content"]
+
+            import re as re_mod
+            json_match = re_mod.search(r'\{.*\}', content, re_mod.DOTALL)
+            if json_match:
+                metadata = json.loads(json_match.group())
+            else:
+                raise HTTPException(status_code=500, detail="Failed to parse metadata response")
+
+            # Save to project
+            if project_id:
+                try:
+                    await db.projects.update_one(
+                        {"_id": ObjectId(project_id), "userId": user["_id"]},
+                        {"$set": {"metadata": metadata}}
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to save metadata: {e}")
+
+            # Log cost
+            if project_id:
+                await db.cost_logs.insert_one({
+                    "userId": user["_id"],
+                    "projectId": project_id,
+                    "date": datetime.now(timezone.utc).isoformat(),
+                    "action": "metadata",
+                    "provider": "openai",
+                    "cost": 0.01,
+                    "details": "Platform metadata generation"
+                })
+
+            return {"metadata": metadata, "cost": 0.01}
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"OpenAI metadata error: {e.response.status_code}")
+        raise HTTPException(status_code=502, detail="OpenAI API error. Check your API key.")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Failed to parse AI response. Try again.")
+    except Exception as e:
+        logger.error(f"Metadata generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Metadata generation failed: {str(e)}")
+
+
+@api_router.post("/ai/generate-thumbnail")
+async def generate_thumbnail(data: dict, request: Request):
+    """Generate a platform-specific thumbnail using OpenAI GPT Image."""
+    user = await get_current_user(request)
+    logger.info(f"[AI] generate-thumbnail called by {user.get('email')}")
+
+    openai_key = await get_user_openai_key(user["_id"])
+    if not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not configured. Please add it in Settings.")
+
+    platform = data.get("platform", "tiktok")
+    title = data.get("title", "")
+    mood = data.get("mood", "")
+    genre = data.get("genre", "")
+    project_id = data.get("projectId", "")
+
+    # Platform-specific sizes and styles
+    platform_configs = {
+        "tiktok": {
+            "size": "1024x1536",
+            "style": "Bold vertical cover art for TikTok. Large dramatic text overlay with the song title, emotional cinematic imagery, neon accents, Latin music aesthetic, dark moody background with vibrant color pops. The text should be large and readable.",
+        },
+        "youtube": {
+            "size": "1536x1024",
+            "style": "Horizontal YouTube thumbnail. Clickbait style with very large bold text, emotional facial expression or dramatic scene, high contrast, warm cinematic colors, Latin music video aesthetic. Text must be huge and eye-catching.",
+        },
+        "instagram": {
+            "size": "1024x1024",
+            "style": "Square Instagram cover. Clean aesthetic design, subtle elegant text overlay, warm golden tones, cinematic mood, Latin romantic atmosphere. Minimalist but emotional composition.",
+        },
+        "facebook": {
+            "size": "1536x1024",
+            "style": "Horizontal Facebook cover. Emotional cinematic imagery, warm nostalgic color palette, subtle text overlay with song title, Latin American atmosphere, shareable and relatable visual.",
+        },
+    }
+
+    config = platform_configs.get(platform, platform_configs["tiktok"])
+    prompt = f'{config["style"]} Song title: "{title}". Genre: {genre}. Mood: {mood}. Ultra-realistic, photographic quality.'
+
+    try:
+        thumbnails_dir = PROJECTS_DIR / project_id / "thumbnails"
+        thumbnails_dir.mkdir(parents=True, exist_ok=True)
+        thumb_filename = f"thumb_{platform}.png"
+        thumb_path = thumbnails_dir / thumb_filename
+
+        async with httpx.AsyncClient(timeout=120.0) as client_http:
+            response = await client_http.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-image-1",
+                    "prompt": prompt,
+                    "n": 1,
+                    "size": config["size"],
+                    "quality": "low"
+                }
+            )
+
+            if response.status_code != 200:
+                error_text = response.text[:300]
+                logger.error(f"OpenAI thumbnail error: {error_text}")
+                raise HTTPException(status_code=response.status_code, detail=f"Thumbnail generation failed: {error_text}")
+
+            result = response.json()
+            image_item = result["data"][0]
+
+            if "b64_json" in image_item:
+                image_data = base64.b64decode(image_item["b64_json"])
+            elif "url" in image_item:
+                img_resp = await client_http.get(image_item["url"])
+                image_data = img_resp.content
+            else:
+                raise HTTPException(status_code=500, detail="Unknown image format")
+
+        async with aiofiles.open(thumb_path, 'wb') as f:
+            await f.write(image_data)
+
+        thumb_url = f"/api/projects/{project_id}/thumbnails/{thumb_filename}"
+
+        # Log cost
+        cost = 0.005
+        await db.cost_logs.insert_one({
+            "userId": user["_id"],
+            "projectId": project_id,
+            "date": datetime.now(timezone.utc).isoformat(),
+            "action": "thumbnail",
+            "provider": "openai",
+            "cost": cost,
+            "details": f"Thumbnail for {platform}"
+        })
+
+        await db.projects.update_one(
+            {"_id": ObjectId(project_id), "userId": user["_id"]},
+            {"$set": {f"thumbnails.{platform}": thumb_url}}
+        )
+
+        return {
+            "success": True,
+            "thumbnailUrl": thumb_url,
+            "platform": platform,
+            "cost": cost,
+        }
+
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Thumbnail generation timed out. Try again.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Thumbnail generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Thumbnail generation failed: {str(e)}")
+
+
+@api_router.get("/projects/{project_id}/thumbnails/{filename}")
+async def serve_thumbnail(project_id: str, filename: str, request: Request):
+    """Serve thumbnail files."""
+    await get_current_user(request)
+    file_path = PROJECTS_DIR / project_id / "thumbnails" / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    return FileResponse(str(file_path))
+
+
 @api_router.post("/ai/analyze-song")
 async def analyze_song(data: AnalyzeSongRequest, request: Request):
     """Analyze song with OpenAI GPT-4o-mini to generate visual concept"""
