@@ -12,7 +12,8 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
   const [isPlaying, setIsPlaying] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [detectionMessage, setDetectionMessage] = useState('');
-  const [dragging, setDragging] = useState(null); // 'start' | 'end' | null
+  const [dragging, setDragging] = useState(null); // 'start' | 'end' | 'region' | null
+  const dragOriginRef = useRef(null); // { time, climaxStart, climaxEnd } for region drag
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -68,8 +69,12 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
   const handleMouseDown = useCallback((which) => (e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (which === 'region') {
+      const time = pxToTime(e.clientX);
+      dragOriginRef.current = { time, climaxStart: project.climaxStart, climaxEnd: project.climaxEnd };
+    }
     setDragging(which);
-  }, []);
+  }, [pxToTime, project.climaxStart, project.climaxEnd]);
 
   const handleMouseMove = useCallback((e) => {
     if (!dragging) return;
@@ -77,13 +82,24 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     const rounded = Math.round(time * 10) / 10;
 
     if (dragging === 'start') {
-      const maxStart = project.climaxEnd - 5; // minimum 5s gap
+      const maxStart = project.climaxEnd - 5;
       const clamped = Math.max(0, Math.min(rounded, maxStart));
       updateProject({ climaxStart: clamped });
     } else if (dragging === 'end') {
       const minEnd = project.climaxStart + 5;
       const clamped = Math.max(minEnd, Math.min(rounded, duration));
       updateProject({ climaxEnd: clamped });
+    } else if (dragging === 'region' && dragOriginRef.current) {
+      const delta = rounded - dragOriginRef.current.time;
+      const regionDur = dragOriginRef.current.climaxEnd - dragOriginRef.current.climaxStart;
+      let newStart = dragOriginRef.current.climaxStart + delta;
+      let newEnd = dragOriginRef.current.climaxEnd + delta;
+      // Clamp to boundaries
+      if (newStart < 0) { newStart = 0; newEnd = regionDur; }
+      if (newEnd > duration) { newEnd = duration; newStart = duration - regionDur; }
+      newStart = Math.round(newStart * 10) / 10;
+      newEnd = Math.round(newEnd * 10) / 10;
+      updateProject({ climaxStart: newStart, climaxEnd: newEnd });
     }
   }, [dragging, pxToTime, project.climaxStart, project.climaxEnd, duration, updateProject]);
 
@@ -98,7 +114,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     if (dragging) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'ew-resize';
+      document.body.style.cursor = dragging === 'region' ? 'grabbing' : 'ew-resize';
       document.body.style.userSelect = 'none';
     }
     return () => {
@@ -112,8 +128,13 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
   // Touch support for mobile
   const handleTouchStart = useCallback((which) => (e) => {
     e.stopPropagation();
+    if (which === 'region') {
+      const touch = e.touches[0];
+      const time = pxToTime(touch.clientX);
+      dragOriginRef.current = { time, climaxStart: project.climaxStart, climaxEnd: project.climaxEnd };
+    }
     setDragging(which);
-  }, []);
+  }, [pxToTime, project.climaxStart, project.climaxEnd]);
 
   const handleTouchMove = useCallback((e) => {
     if (!dragging) return;
@@ -126,6 +147,16 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     } else if (dragging === 'end') {
       const clamped = Math.max(project.climaxStart + 5, Math.min(rounded, duration));
       updateProject({ climaxEnd: clamped });
+    } else if (dragging === 'region' && dragOriginRef.current) {
+      const delta = rounded - dragOriginRef.current.time;
+      const regionDur = dragOriginRef.current.climaxEnd - dragOriginRef.current.climaxStart;
+      let newStart = dragOriginRef.current.climaxStart + delta;
+      let newEnd = dragOriginRef.current.climaxEnd + delta;
+      if (newStart < 0) { newStart = 0; newEnd = regionDur; }
+      if (newEnd > duration) { newEnd = duration; newStart = duration - regionDur; }
+      newStart = Math.round(newStart * 10) / 10;
+      newEnd = Math.round(newEnd * 10) / 10;
+      updateProject({ climaxStart: newStart, climaxEnd: newEnd });
     }
   }, [dragging, pxToTime, project.climaxStart, project.climaxEnd, duration, updateProject]);
 
@@ -347,8 +378,10 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
                   zIndex: 2,
                 }}
               />
-              {/* Selected region highlight (top + bottom border) */}
+              {/* Selected region highlight (top + bottom border) — draggable */}
               <div
+                onMouseDown={handleMouseDown('region')}
+                onTouchStart={handleTouchStart('region')}
                 style={{
                   position: 'absolute',
                   top: 0,
@@ -357,10 +390,12 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
                   height: 140,
                   borderTop: '3px solid #e94560',
                   borderBottom: '3px solid #e94560',
-                  background: 'rgba(233,69,96,0.08)',
-                  pointerEvents: 'none',
+                  background: dragging === 'region' ? 'rgba(233,69,96,0.18)' : 'rgba(233,69,96,0.08)',
+                  cursor: 'grab',
                   zIndex: 3,
+                  touchAction: 'none',
                 }}
+                data-testid="trim-region"
               />
 
               {/* ===== LEFT TRIM BAR (Start) ===== */}
@@ -636,7 +671,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
         <ul className="text-sm text-[#8b8b99] space-y-1">
           <li>Drag the <strong className="text-[#e94560]">left trim bar</strong> to set the start point</li>
           <li>Drag the <strong className="text-[#e94560]">right trim bar</strong> to set the end point</li>
-          <li>The highlighted area between bars is your selected region</li>
+          <li>Drag the <strong className="text-[#e94560]">highlighted region</strong> to move the whole selection without resizing</li>
           <li><strong>Play Selection</strong> plays only the highlighted region</li>
           <li>Type exact times (m:ss) in the fields below the waveform</li>
           <li>Use "Auto-detect" to find the most energetic 40-second section</li>

@@ -102,7 +102,7 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
         localPath: data.localPath,
         mediaUrl: data.mediaUrl,
         duration: data.duration || 0,
-        animate: false,
+        effect: 'ken_burns_in',
         stillDuration: 4,
         clipUrl: '',
         clipPath: '',
@@ -153,7 +153,7 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
           localPath: data.localPath,
           mediaUrl: data.mediaUrl,
           duration: data.duration || 0,
-          animate: false,
+          effect: 'ken_burns_in',
           stillDuration: 4,
           clipUrl: '',
           clipPath: '',
@@ -181,9 +181,9 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
     updateMedia(media.filter(m => m.id !== id));
   };
 
-  const toggleAnimate = (id) => {
+  const updateEffect = (id, effect) => {
     updateMedia(media.map(m =>
-      m.id === id ? { ...m, animate: !m.animate } : m
+      m.id === id ? { ...m, effect } : m
     ));
   };
 
@@ -553,6 +553,41 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
             </div>
           )}
 
+          {/* Effect Presets */}
+          {media.filter(m => m.status !== 'rejected').length > 0 && (
+            <div className="bg-[#0c0c0f] border border-[#2a2a35] rounded-lg p-3" data-testid="effect-presets">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-[#8b8b99] uppercase tracking-wider font-medium">Quick Presets</span>
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                {[
+                  { id: 'cinematic', label: 'Cinematic', effects: ['ken_burns_in', 'pan_right', 'ken_burns_out', 'pan_left', 'ken_burns_in'] },
+                  { id: 'dynamic', label: 'Dynamic', effects: ['pan_left', 'ken_burns_in', 'pan_right', 'ken_burns_out', 'pan_up'] },
+                  { id: 'smooth', label: 'Smooth', effects: ['fade_in', 'ken_burns_in', 'ken_burns_out', 'fade_out', 'ken_burns_in'] },
+                  { id: 'energetic', label: 'Energetic', effects: ['pan_left', 'pan_right', 'pan_up', 'pan_down', 'ken_burns_in'] },
+                ].map(preset => (
+                  <button
+                    key={preset.id}
+                    onClick={() => {
+                      const visible = media.filter(m => m.status !== 'rejected');
+                      const updated = media.map(m => {
+                        if (m.status === 'rejected') return m;
+                        const idx = visible.indexOf(m);
+                        if (idx === -1) return m;
+                        return { ...m, effect: preset.effects[idx % preset.effects.length] };
+                      });
+                      updateMedia(updated);
+                    }}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#2a2a35] text-[#f8f8f8] hover:bg-[#3a3a45] border border-[#2a2a35] hover:border-[#00b4d8] transition-all"
+                    data-testid={`preset-${preset.id}`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Media Items */}
           <div className="space-y-2">
             {media.filter(m => m.status !== 'rejected').map((item, index) => (
@@ -600,35 +635,40 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
                   <div className="flex items-center gap-3 flex-wrap">
                     {isImage(item.type) && (
                       <>
-                        {/* Animate toggle */}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); toggleAnimate(item.id); }}
-                          className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
-                            item.animate
-                              ? 'bg-[#e94560]/20 text-[#e94560] border border-[#e94560]/30'
-                              : 'bg-[#2a2a35] text-[#8b8b99] border border-[#2a2a35]'
-                          }`}
-                          data-testid={`toggle-animate-${item.id}`}
+                        {/* Effect selector */}
+                        <select
+                          value={item.effect || 'ken_burns_in'}
+                          onChange={(e) => { e.stopPropagation(); updateEffect(item.id, e.target.value); }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="px-2 py-0.5 rounded text-[11px] font-medium bg-[#2a2a35] text-[#f8f8f8] border border-[#2a2a35] focus:border-[#00b4d8] focus:outline-none cursor-pointer"
+                          data-testid={`effect-select-${item.id}`}
                         >
-                          <Play className="w-3 h-3" />
-                          {item.animate ? 'Animate ON' : 'Still'}
-                        </button>
+                          <option value="ken_burns_in">Zoom In</option>
+                          <option value="ken_burns_out">Zoom Out</option>
+                          <option value="pan_left">Pan Left</option>
+                          <option value="pan_right">Pan Right</option>
+                          <option value="pan_up">Pan Up</option>
+                          <option value="pan_down">Pan Down</option>
+                          <option value="fade_in">Fade In</option>
+                          <option value="fade_out">Fade Out</option>
+                          <option value="blur_in">Blur In</option>
+                          <option value="blur_out">Blur Out</option>
+                          <option value="static">Static</option>
+                        </select>
 
-                        {/* Duration slider (only for stills) */}
-                        {!item.animate && (
-                          <div className="flex items-center gap-1.5">
-                            <Clock className="w-3 h-3 text-[#8b8b99]" />
-                            <input
-                              type="range"
-                              min="2" max="8" step="0.5"
-                              value={item.stillDuration || 4}
-                              onChange={(e) => { e.stopPropagation(); updateStillDuration(item.id, parseFloat(e.target.value)); }}
-                              className="w-20 h-1 accent-[#00b4d8]"
-                              data-testid={`duration-slider-${item.id}`}
-                            />
-                            <span className="text-[11px] text-[#8b8b99] w-6">{item.stillDuration || 4}s</span>
-                          </div>
-                        )}
+                        {/* Duration slider */}
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3 h-3 text-[#8b8b99]" />
+                          <input
+                            type="range"
+                            min="2" max="8" step="0.5"
+                            value={item.stillDuration || 4}
+                            onChange={(e) => { e.stopPropagation(); updateStillDuration(item.id, parseFloat(e.target.value)); }}
+                            className="w-20 h-1 accent-[#00b4d8]"
+                            data-testid={`duration-slider-${item.id}`}
+                          />
+                          <span className="text-[11px] text-[#8b8b99] w-6">{item.stillDuration || 4}s</span>
+                        </div>
                       </>
                     )}
                     {!isImage(item.type) && item.duration > 0 && (

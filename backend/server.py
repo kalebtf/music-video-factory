@@ -740,7 +740,7 @@ async def download_stock_media(project_id: str, request: Request, data: dict):
 
 @api_router.post("/projects/{project_id}/media/still-to-clip")
 async def still_to_clip(project_id: str, request: Request, data: dict):
-    """Convert a still image into a video clip of specified duration using FFmpeg."""
+    """Convert a still image into a video clip with cinematic effects using FFmpeg."""
     user = await get_current_user(request)
     project = await db.projects.find_one({"_id": ObjectId(project_id), "userId": user["_id"]})
     if not project:
@@ -748,40 +748,84 @@ async def still_to_clip(project_id: str, request: Request, data: dict):
 
     image_path = data.get("imagePath")
     duration = data.get("duration", 4)
-    duration = max(2, min(8, duration))  # clamp 2-8s
+    duration = max(2, min(10, duration))
+    effect = data.get("effect", "ken_burns_in")
 
     if not image_path or not Path(image_path).exists():
-        raise HTTPException(status_code=400, detail="Image file not found")
+        raise HTTPException(status_code=400, detail=f"Image file not found: {image_path}")
 
     clips_dir = PROJECTS_DIR / project_id / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
 
     clip_id = str(uuid.uuid4())[:8]
     output_path = clips_dir / f"still_{clip_id}.mp4"
+    frames = int(duration * 30)
 
-    # Ken Burns effect: gentle zoom + pan for a non-static feel
+    # Build the effect filter chain
+    base_scale = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+    effect_filters = {
+        "ken_burns_in": f"{base_scale},zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
+        "ken_burns_out": f"{base_scale},zoompan=z='if(lte(zoom,1.0),1.3,max(1.001,zoom-0.0015))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
+        "pan_left": f"{base_scale},zoompan=z='1.15':x='iw*0.15*(1-on/{frames})':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
+        "pan_right": f"{base_scale},zoompan=z='1.15':x='iw*0.15*(on/{frames})':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
+        "pan_up": f"{base_scale},zoompan=z='1.15':x='iw/2-(iw/zoom/2)':y='ih*0.15*(1-on/{frames})':d={frames}:s=1080x1920:fps=30",
+        "pan_down": f"{base_scale},zoompan=z='1.15':x='iw/2-(iw/zoom/2)':y='ih*0.15*(on/{frames})':d={frames}:s=1080x1920:fps=30",
+        "fade_in": f"{base_scale}",
+        "fade_out": f"{base_scale}",
+        "blur_in": f"{base_scale}",
+        "blur_out": f"{base_scale}",
+        "static": f"{base_scale}",
+    }
+
+    vf = effect_filters.get(effect, effect_filters["ken_burns_in"])
+
+    # For fade/blur effects, we apply the filter in the final encode step
+    fade_filter = ""
+    if effect == "fade_in":
+        fade_filter = f",fade=t=in:st=0:d={min(1.5, duration/2)}"
+    elif effect == "fade_out":
+        fade_filter = f",fade=t=out:st={max(0, duration - 1.5)}:d={min(1.5, duration/2)}"
+    elif effect == "blur_in":
+        # Simulate blur-to-sharp: start blurred, sharpen over 1s
+        fade_filter = f",fade=t=in:st=0:d=1"
+    elif effect == "blur_out":
+        fade_filter = f",fade=t=out:st={max(0, duration - 1)}:d=1"
+
     cmd = [
         'ffmpeg', '-y',
         '-loop', '1', '-i', str(image_path),
-        '-vf', f'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z=\'min(zoom+0.0015,1.3)\':x=\'iw/2-(iw/zoom/2)\':y=\'ih/2-(ih/zoom/2)\':d={int(duration*30)}:s=1080x1920:fps=30',
+        '-vf', vf + fade_filter,
         '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
         '-t', str(duration), '-pix_fmt', 'yuv420p',
         str(output_path)
     ]
+    # zoompan already sets fps, but for non-zoompan effects we need -r
+    if effect in ("fade_in", "fade_out", "blur_in", "blur_out", "static"):
+        cmd = [
+            'ffmpeg', '-y',
+            '-loop', '1', '-i', str(image_path),
+            '-vf', vf + fade_filter,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+            '-t', str(duration), '-pix_fmt', 'yuv420p', '-r', '30',
+            str(output_path)
+        ]
 
+    logger.info(f"[EFFECT] Creating clip with effect='{effect}' for {image_path}")
     result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+
     if result.returncode != 0:
-        logger.error(f"Still-to-clip failed: {result.stderr[:500]}")
-        # Simpler fallback without zoompan
+        logger.error(f"Still-to-clip effect failed ({effect}): {result.stderr[:500]}")
+        # Fallback: simple static clip
         cmd_fallback = [
             'ffmpeg', '-y', '-loop', '1', '-i', str(image_path),
-            '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
+            '-vf', f'{base_scale}',
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
             '-t', str(duration), '-pix_fmt', 'yuv420p', '-r', '30',
             str(output_path)
         ]
         result = await asyncio.to_thread(subprocess.run, cmd_fallback, capture_output=True, text=True)
         if result.returncode != 0:
+            logger.error(f"Fallback also failed: {result.stderr[:500]}")
             raise HTTPException(status_code=500, detail="Failed to convert image to clip")
 
     return {
@@ -789,6 +833,37 @@ async def still_to_clip(project_id: str, request: Request, data: dict):
         "clipUrl": f"/api/projects/{project_id}/clips/still_{clip_id}.mp4",
         "clipPath": str(output_path),
         "duration": duration,
+        "effect": effect,
+    }
+
+@api_router.get("/effects/list")
+async def list_effects():
+    """Return all available visual effects and transitions for Library mode."""
+    return {
+        "effects": [
+            {"id": "ken_burns_in", "name": "Zoom In", "category": "motion", "description": "Slow cinematic zoom in"},
+            {"id": "ken_burns_out", "name": "Zoom Out", "category": "motion", "description": "Slow cinematic zoom out"},
+            {"id": "pan_left", "name": "Pan Left", "category": "motion", "description": "Gentle pan from right to left"},
+            {"id": "pan_right", "name": "Pan Right", "category": "motion", "description": "Gentle pan from left to right"},
+            {"id": "pan_up", "name": "Pan Up", "category": "motion", "description": "Gentle upward pan"},
+            {"id": "pan_down", "name": "Pan Down", "category": "motion", "description": "Gentle downward pan"},
+            {"id": "fade_in", "name": "Fade In", "category": "fade", "description": "Fade from black"},
+            {"id": "fade_out", "name": "Fade Out", "category": "fade", "description": "Fade to black"},
+            {"id": "blur_in", "name": "Blur In", "category": "fade", "description": "Blur to sharp reveal"},
+            {"id": "blur_out", "name": "Blur Out", "category": "fade", "description": "Sharp to blur exit"},
+            {"id": "static", "name": "Static", "category": "basic", "description": "No motion, still frame"},
+        ],
+        "transitions": [
+            {"id": "crossfade", "name": "Crossfade", "description": "Smooth blend between clips"},
+            {"id": "cut", "name": "Hard Cut", "description": "Instant cut between clips"},
+            {"id": "fade_black", "name": "Fade to Black", "description": "Fade through black"},
+        ],
+        "presets": [
+            {"id": "cinematic", "name": "Cinematic", "effects": ["ken_burns_in", "pan_right", "ken_burns_out", "pan_left", "ken_burns_in"], "transition": "crossfade"},
+            {"id": "dynamic", "name": "Dynamic", "effects": ["pan_left", "ken_burns_in", "pan_right", "ken_burns_out", "pan_up"], "transition": "crossfade"},
+            {"id": "smooth", "name": "Smooth & Slow", "effects": ["fade_in", "ken_burns_in", "ken_burns_out", "fade_out", "ken_burns_in"], "transition": "crossfade"},
+            {"id": "energetic", "name": "Energetic", "effects": ["pan_left", "pan_right", "pan_up", "pan_down", "ken_burns_in"], "transition": "cut"},
+        ]
     }
 
 @api_router.post("/projects/{project_id}/media/trim-video")
@@ -2723,11 +2798,14 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         effective_duration = audio_duration if audio_duration > 0 else total_clip_duration
 
         if data.addTextOverlay and hooks_to_show and effective_duration > 0:
-            segment_duration = effective_duration / len(hooks_to_show)
-            for i, hook in enumerate(hooks_to_show):
+            # 1 hook per clip — each hook appears only once, mapped to its clip
+            accumulated_time = 0
+            for i in range(min(len(hooks_to_show), len(clip_durations))):
+                hook = hooks_to_show[i]
+                clip_dur = clip_durations[i] if i < len(clip_durations) else (effective_duration / len(hooks_to_show))
                 safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
-                start_t = i * segment_duration
-                end_t = start_t + segment_duration
+                start_t = accumulated_time
+                end_t = accumulated_time + clip_dur
                 filter_parts.append(
                     f"drawtext=text='{safe_hook}'"
                     f":fontsize=56:fontcolor=white"
@@ -2735,6 +2813,7 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
                     f":shadowcolor=black@0.8:shadowx=4:shadowy=4"
                     f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
                 )
+                accumulated_time += clip_dur
 
         # Subtitle overlays — cap at MAX_SUBTITLE_LINES to prevent filter overload
         subtitles_capped = False

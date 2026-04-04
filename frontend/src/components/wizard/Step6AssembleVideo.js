@@ -71,7 +71,7 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
     }, POLL_INTERVAL);
   };
 
-  // Prepare library media items into clips before assembly
+  // Prepare library media items into clips before assembly (FFmpeg effects only — no AI)
   const prepareLibraryClips = async () => {
     const preparedClipPaths = [];
 
@@ -81,72 +81,17 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
 
       const isImage = item.type === 'stock-photo' || item.type === 'upload-image';
 
-      if (isImage && item.animate) {
-        // Animate via FAL.AI — reuse existing animate endpoint
-        try {
-          const { data } = await api.post('/ai/animate-image', {
-            projectId,
-            imagePath: item.localPath,
-            imageIndex: i,
-          });
-          // Poll for animation completion
-          if (data.requestId) {
-            let animDone = false;
-            let attempts = 0;
-            while (!animDone && attempts < 60) {
-              await new Promise(r => setTimeout(r, 3000));
-              const { data: statusData } = await api.get(`/ai/animation-status/${data.requestId}`, {
-                params: { project_id: projectId, image_index: i }
-              });
-              if (statusData.status === 'COMPLETED' && statusData.clipPath) {
-                preparedClipPaths.push(statusData.clipPath);
-                animDone = true;
-              } else if (statusData.status === 'COMPLETED' && statusData.error) {
-                // Completed but no video — fallback to still
-                const { data: stillData } = await api.post(`/projects/${projectId}/media/still-to-clip`, {
-                  imagePath: item.localPath,
-                  duration: item.stillDuration || 4,
-                });
-                preparedClipPaths.push(stillData.clipPath);
-                animDone = true;
-              } else if (statusData.status === 'ERROR') {
-                // Fallback to still
-                const { data: stillData } = await api.post(`/projects/${projectId}/media/still-to-clip`, {
-                  imagePath: item.localPath,
-                  duration: item.stillDuration || 4,
-                });
-                preparedClipPaths.push(stillData.clipPath);
-                animDone = true;
-              }
-              attempts++;
-            }
-            if (!animDone) {
-              // Timeout — fallback to still
-              const { data: stillData } = await api.post(`/projects/${projectId}/media/still-to-clip`, {
-                imagePath: item.localPath,
-                duration: item.stillDuration || 4,
-              });
-              preparedClipPaths.push(stillData.clipPath);
-            }
-          }
-        } catch (err) {
-          console.error('Animation failed, falling back to still:', err);
-          const { data: stillData } = await api.post(`/projects/${projectId}/media/still-to-clip`, {
-            imagePath: item.localPath,
-            duration: item.stillDuration || 4,
-          });
-          preparedClipPaths.push(stillData.clipPath);
-        }
-      } else if (isImage && !item.animate) {
-        // Convert still image to clip
+      if (isImage) {
+        // Convert image to clip with selected FFmpeg effect
         try {
           const { data } = await api.post(`/projects/${projectId}/media/still-to-clip`, {
             imagePath: item.localPath,
             duration: item.stillDuration || 4,
+            effect: item.effect || 'ken_burns_in',
           });
           preparedClipPaths.push(data.clipPath);
         } catch (err) {
-          console.error('Still-to-clip failed:', err);
+          console.error(`Still-to-clip failed for item ${i}:`, err);
         }
       } else {
         // Video — trim to climax duration
@@ -376,7 +321,7 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
                 </div>
                 <div className="flex-1">
                   <span className="text-[#f8f8f8] font-medium">
-                    {isLibrary ? `${isImg ? (item.animate ? 'Animated' : 'Still') : 'Video'} ${index + 1}` : `Clip ${index + 1}`}
+                    {isLibrary ? `${isImg ? (item.effect || 'Zoom In') : 'Video'} ${index + 1}` : `Clip ${index + 1}`}
                   </span>
                   <span className="text-[#8b8b99] text-sm ml-2">
                     {isLibrary ? `${item.duration || item.stillDuration || 4}s` : `${item.duration}s`}
