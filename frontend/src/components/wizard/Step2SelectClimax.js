@@ -6,12 +6,40 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
   const waveformRef = useRef(null);
   const wavesurferRef = useRef(null);
   const regionRef = useRef(null);
+  const startLabelRef = useRef(null);
+  const endLabelRef = useRef(null);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [detectionMessage, setDetectionMessage] = useState('');
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const parseTime = (timeStr) => {
+    const parts = timeStr.split(':');
+    if (parts.length === 2) {
+      const mins = parseInt(parts[0], 10) || 0;
+      const secs = parseInt(parts[1], 10) || 0;
+      return mins * 60 + secs;
+    }
+    return parseFloat(timeStr) || 0;
+  };
+
+  // Update floating time labels on region handles
+  const updateHandleLabels = useCallback((start, end) => {
+    if (startLabelRef.current) {
+      startLabelRef.current.textContent = formatTime(start);
+    }
+    if (endLabelRef.current) {
+      endLabelRef.current.textContent = formatTime(end);
+    }
+  }, []);
 
   // Stop playback when it reaches the end marker
   const checkBounds = useCallback(() => {
@@ -31,6 +59,74 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     const iv = setInterval(checkBounds, 80);
     return () => clearInterval(iv);
   }, [isPlaying, checkBounds]);
+
+  // Style region handles after creation
+  const styleRegionHandles = useCallback(() => {
+    const container = waveformRef.current;
+    if (!container) return;
+
+    // Find region element
+    const regionEl = container.querySelector('[part="region"]') || container.querySelector('[data-id]')?.closest('[part="region"]');
+    
+    // Style all handle elements within the waveform
+    const handles = container.querySelectorAll('[data-resize]');
+    
+    handles.forEach((handle, i) => {
+      handle.style.width = '24px';
+      handle.style.background = '#e94560';
+      handle.style.borderRadius = '6px';
+      handle.style.border = '3px solid #f25a74';
+      handle.style.cursor = 'ew-resize';
+      handle.style.zIndex = '10';
+      handle.style.opacity = '1';
+      handle.style.boxShadow = '0 0 12px rgba(233,69,96,0.6)';
+      handle.style.transition = 'box-shadow 0.2s';
+      
+      // Add hover effect
+      handle.addEventListener('mouseenter', () => {
+        handle.style.boxShadow = '0 0 20px rgba(233,69,96,0.9)';
+        handle.style.background = '#f25a74';
+      });
+      handle.addEventListener('mouseleave', () => {
+        handle.style.boxShadow = '0 0 12px rgba(233,69,96,0.6)';
+        handle.style.background = '#e94560';
+      });
+
+      // Add time label above handle
+      if (!handle.querySelector('.handle-label')) {
+        const label = document.createElement('div');
+        label.className = 'handle-label';
+        label.style.cssText = `
+          position: absolute;
+          top: -28px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: #e94560;
+          color: white;
+          font-size: 11px;
+          font-weight: 700;
+          font-family: monospace;
+          padding: 2px 8px;
+          border-radius: 4px;
+          white-space: nowrap;
+          pointer-events: none;
+          z-index: 20;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        `;
+        handle.style.position = 'relative';
+        handle.style.overflow = 'visible';
+        handle.appendChild(label);
+        
+        if (i === 0) {
+          startLabelRef.current = label;
+          label.textContent = formatTime(project.climaxStart);
+        } else {
+          endLabelRef.current = label;
+          label.textContent = formatTime(project.climaxEnd);
+        }
+      }
+    });
+  }, [project.climaxStart, project.climaxEnd]);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,17 +177,30 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
           const region = regions.addRegion({
             start,
             end,
-            color: 'rgba(233, 69, 96, 0.25)',
+            color: 'rgba(233, 69, 96, 0.20)',
             drag: true,
             resize: true,
           });
           regionRef.current = region;
 
+          // Style handles after a short delay to let DOM render
+          setTimeout(() => {
+            styleRegionHandles();
+            updateHandleLabels(start, end);
+          }, 200);
+
+          region.on('update', () => {
+            updateHandleLabels(region.start, region.end);
+          });
+
           region.on('update-end', () => {
+            const newStart = Math.round(region.start * 10) / 10;
+            const newEnd = Math.round(region.end * 10) / 10;
             updateProject({
-              climaxStart: Math.round(region.start * 10) / 10,
-              climaxEnd: Math.round(region.end * 10) / 10,
+              climaxStart: newStart,
+              climaxEnd: newEnd,
             });
+            updateHandleLabels(newStart, newEnd);
           });
         });
 
@@ -151,22 +260,6 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     };
   }, [project.audioUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const parseTime = (timeStr) => {
-    const parts = timeStr.split(':');
-    if (parts.length === 2) {
-      const mins = parseInt(parts[0], 10) || 0;
-      const secs = parseInt(parts[1], 10) || 0;
-      return mins * 60 + secs;
-    }
-    return parseFloat(timeStr) || 0;
-  };
-
   const regionDuration = project.climaxEnd - project.climaxStart;
 
   // ALWAYS play from climax start, stop at climax end
@@ -200,6 +293,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
       if (regionRef.current) {
         regionRef.current.setOptions({ start: data.start, end: data.end });
       }
+      updateHandleLabels(data.start, data.end);
 
       setDetectionMessage(data.message);
     } catch (err) {
@@ -217,7 +311,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
       if (regionRef.current) {
         regionRef.current.setOptions({ start: newStart });
       }
-      // Seek to new start position
+      updateHandleLabels(newStart, project.climaxEnd);
       if (wavesurferRef.current) {
         wavesurferRef.current.setTime(newStart);
         setCurrentTime(newStart);
@@ -232,6 +326,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
       if (regionRef.current) {
         regionRef.current.setOptions({ end: newEnd });
       }
+      updateHandleLabels(project.climaxStart, newEnd);
     }
   };
 
@@ -264,10 +359,26 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
       <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
         <div
           ref={waveformRef}
-          className="w-full bg-[#0c0c0f] rounded-lg p-4 cursor-pointer"
-          style={{ minHeight: 140 }}
+          className="w-full bg-[#0c0c0f] rounded-lg p-4 pt-10 cursor-pointer"
+          style={{ minHeight: 160, position: 'relative', overflow: 'visible' }}
           data-testid="waveform"
         />
+
+        {/* Visual handle indicators below waveform */}
+        <div className="flex items-center justify-between mt-4 px-2">
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 bg-[#e94560] rounded" />
+            <span className="text-xs text-[#8b8b99]">Drag handles to adjust selection</span>
+          </div>
+          <div className="flex items-center gap-4 text-sm">
+            <span className="text-[#8b8b99]">
+              Start: <span className="text-[#e94560] font-mono font-semibold">{formatTime(project.climaxStart)}</span>
+            </span>
+            <span className="text-[#8b8b99]">
+              End: <span className="text-[#e94560] font-mono font-semibold">{formatTime(project.climaxEnd)}</span>
+            </span>
+          </div>
+        </div>
 
         {/* Playback controls */}
         <div className="flex items-center justify-center gap-4 mt-5">
@@ -371,10 +482,10 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
       <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-4">
         <h4 className="font-medium text-[#f8f8f8] mb-2">How to use:</h4>
         <ul className="text-sm text-[#8b8b99] space-y-1">
-          <li>• <strong>Play Selection</strong> plays from Start and stops at End</li>
-          <li>• Drag the highlighted region to move the selection</li>
-          <li>• Drag the edges to resize the selection</li>
-          <li>• Type exact start/end times (format: m:ss) — playback jumps immediately</li>
+          <li>• Drag the <strong className="text-[#e94560]">red handles</strong> on the waveform to set start/end points</li>
+          <li>• Drag the highlighted region to move the entire selection</li>
+          <li>• <strong>Play Selection</strong> plays only the selected region</li>
+          <li>• Type exact times (format: m:ss) in the fields below</li>
           <li>• Use "Auto-detect" to find the most energetic 40-second section</li>
         </ul>
       </div>

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import {
   Search, Upload, ImageIcon, Film, Loader2, X, GripVertical,
-  Play, Check, Trash2, Clock, Sliders
+  Play, Check, Trash2, Clock, Wand2, Copy, CheckCheck
 } from 'lucide-react';
 import api from '../../lib/api';
 import { AuthImage, AuthVideo } from '../AuthImage';
@@ -18,6 +18,8 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [processingItems, setProcessingItems] = useState(new Set());
   const [error, setError] = useState('');
+  const [generatingPrompts, setGeneratingPrompts] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState(null);
   const fileInputRef = useRef(null);
 
   const media = project.media || [];
@@ -213,6 +215,51 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
   const approvedCount = media.filter(m => m.status === 'approved').length;
   const isImage = (type) => type === 'stock-photo' || type === 'upload-image';
 
+  const imagePrompts = project.imagePrompts || [];
+
+  const handleGeneratePrompts = async () => {
+    if (!project.title?.trim() && !project.lyrics?.trim()) {
+      setError('Add a song title or lyrics in Step 1 to generate image prompts.');
+      return;
+    }
+    setGeneratingPrompts(true);
+    setError('');
+    try {
+      const { data } = await api.post('/ai/generate-image-prompts', {
+        projectId,
+        title: project.title || '',
+        lyrics: project.lyrics || '',
+        genre: project.genre || '',
+      });
+      if (data.prompts?.length > 0) {
+        updateProject({ imagePrompts: data.prompts });
+      }
+    } catch (err) {
+      console.error('Prompt generation failed:', err);
+      setError(err.response?.data?.detail || 'Failed to generate prompts. Check your OpenAI key in Settings.');
+    } finally {
+      setGeneratingPrompts(false);
+    }
+  };
+
+  const handleCopyPrompt = async (prompt, index) => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 2000);
+    } catch {
+      // Fallback
+      const ta = document.createElement('textarea');
+      ta.value = prompt;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 2000);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="text-center mb-6">
@@ -225,6 +272,60 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
           {error}
         </div>
       )}
+
+      {/* AI Image Prompts Section */}
+      <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Wand2 className="w-5 h-5 text-[#00b4d8]" />
+            <h3 className="font-heading font-semibold text-[#f8f8f8]">AI Image Prompts</h3>
+          </div>
+          <button
+            onClick={handleGeneratePrompts}
+            disabled={generatingPrompts}
+            className="flex items-center gap-2 px-4 py-2 bg-[#00b4d8] text-white rounded-lg hover:bg-[#0096b7] text-sm disabled:opacity-50 transition-all"
+            data-testid="generate-prompts-button"
+          >
+            {generatingPrompts ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+            {generatingPrompts ? 'Generating...' : imagePrompts.length > 0 ? 'Regenerate Prompts' : 'Generate Prompts'}
+          </button>
+        </div>
+        <p className="text-xs text-[#8b8b99]">
+          Generate 7 cinematic image prompts based on your song. Copy them to Midjourney, FLUX, or any image tool.
+        </p>
+
+        {generatingPrompts && (
+          <div className="flex items-center justify-center py-8 gap-3">
+            <Loader2 className="w-6 h-6 text-[#00b4d8] animate-spin" />
+            <span className="text-[#8b8b99] text-sm">Generating prompts from your lyrics...</span>
+          </div>
+        )}
+
+        {!generatingPrompts && imagePrompts.length > 0 && (
+          <div className="space-y-3">
+            {imagePrompts.map((prompt, i) => (
+              <div key={i} className="flex gap-3 bg-[#0c0c0f] p-3 rounded-lg border border-[#2a2a35]">
+                <span className="text-[#00b4d8] font-mono text-sm font-bold flex-shrink-0 mt-0.5">{i + 1}.</span>
+                <p className="text-[#f8f8f8] text-sm leading-relaxed flex-1">{prompt}</p>
+                <button
+                  onClick={() => handleCopyPrompt(prompt, i)}
+                  className="flex-shrink-0 p-2 text-[#8b8b99] hover:text-[#00b4d8] hover:bg-[#00b4d8]/10 rounded-lg transition-all"
+                  title="Copy to clipboard"
+                  data-testid={`copy-prompt-${i}`}
+                >
+                  {copiedIndex === i ? <CheckCheck className="w-4 h-4 text-[#10b981]" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!generatingPrompts && imagePrompts.length === 0 && (
+          <p className="text-sm text-[#8b8b99] py-3 text-center">
+            Click "Generate Prompts" to create 7 cinematic image prompts from your song.
+          </p>
+        )}
+      </div>
 
       {/* Tab Switcher */}
       <div className="flex gap-1 bg-[#0c0c0f] rounded-xl p-1 border border-[#2a2a35]">

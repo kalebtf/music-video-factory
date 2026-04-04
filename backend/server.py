@@ -1414,6 +1414,89 @@ async def analyze_images(data: AnalyzeImagesRequest, request: Request):
         logger.error(f"Image analysis failed: {e}")
         return {"descriptions": "", "success": False, "error": str(e)}
 
+@api_router.post("/ai/generate-image-prompts")
+async def generate_image_prompts(data: dict, request: Request):
+    """Generate 7 detailed image prompts for external use (Midjourney, FLUX, etc.)."""
+    user = await get_current_user(request)
+    logger.info(f"[AI] generate-image-prompts called by {user.get('email')}")
+
+    openai_key = await get_user_openai_key(user["_id"])
+    if not openai_key:
+        raise HTTPException(status_code=400, detail="OpenAI API key not configured. Please add it in Settings.")
+
+    title = data.get("title", "")
+    lyrics = data.get("lyrics", "")
+    genre = data.get("genre", "")
+    project_id = data.get("projectId", "")
+
+    try:
+        async with httpx.AsyncClient() as client_http:
+            response = await client_http.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": """You are an expert visual director specializing in ultra-realistic, cinematic image prompts for Latin American / Mexican music videos.
+
+Generate exactly 7 image prompts. Each prompt MUST be:
+- Written in ENGLISH (for AI image generation tools like Midjourney, FLUX, DALL-E)
+- 2-3 sentences long with specific details about: lighting, composition, camera angle, color palette, and emotional tone
+- Ultra-realistic / photorealistic style — NO cartoon, NO illustration, NO anime
+- Latin American / Mexican atmosphere and cultural aesthetic
+- Emotional, cinematic, nostalgic, with warm color tones (golden hour, amber, deep browns, sunset oranges)
+- Vertical 9:16 portrait format (mention this in each prompt)
+
+The prompts should tell a visual story that flows from scene to scene, capturing the emotion of the song.
+
+Return ONLY valid JSON (no markdown, no code blocks):
+{"prompts": ["prompt 1", "prompt 2", "prompt 3", "prompt 4", "prompt 5", "prompt 6", "prompt 7"]}"""
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Song: {title}\nGenre: {genre}\n\nLyrics:\n{lyrics[:2000]}"
+                        }
+                    ],
+                    "temperature": 0.85,
+                    "max_tokens": 2000,
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            result = response.json()
+            content = result["choices"][0]["message"]["content"]
+
+            # Parse JSON response
+            import re as re_mod
+            json_match = re_mod.search(r'\{.*\}', content, re_mod.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                prompts = parsed.get("prompts", [])
+            else:
+                prompts = []
+
+            # Save prompts to project
+            if project_id:
+                try:
+                    await db.projects.update_one(
+                        {"_id": ObjectId(project_id), "userId": user["_id"]},
+                        {"$set": {"imagePrompts": prompts}}
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to save prompts to project: {e}")
+
+            return {"prompts": prompts}
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"OpenAI API error: {e.response.status_code} {e.response.text[:300]}")
+        raise HTTPException(status_code=502, detail="OpenAI API error. Check your API key.")
+    except Exception as e:
+        logger.error(f"Prompt generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate prompts: {str(e)}")
+
+
 @api_router.post("/ai/analyze-song")
 async def analyze_song(data: AnalyzeSongRequest, request: Request):
     """Analyze song with OpenAI GPT-4o-mini to generate visual concept"""
