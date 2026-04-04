@@ -57,14 +57,18 @@ export default function StepHooksText({ project, updateProject, projectId }) {
         title: project.title,
       });
 
-      if (data.concept?.hooks?.length > 0) {
-        const newHooks = [...new Set([...hooks, ...data.concept.hooks])];
+      // Response from /ai/analyze-song returns concept directly (not nested under .concept)
+      const responseHooks = data.hooks || data.concept?.hooks || [];
+      if (responseHooks.length > 0) {
+        const newHooks = [...new Set([...hooks, ...responseHooks])];
         updateProject({
           concept: {
             ...project.concept,
             hooks: newHooks,
           }
         });
+      } else {
+        setError('AI returned no hooks. Try adding more lyrics or check your OpenAI key.');
       }
     } catch (err) {
       console.error('Hook generation failed:', err);

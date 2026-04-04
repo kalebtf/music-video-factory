@@ -5,15 +5,14 @@ import api from '../../lib/api';
 export default function Step2SelectClimax({ project, updateProject, projectId, saveProject }) {
   const waveformRef = useRef(null);
   const wavesurferRef = useRef(null);
-  const regionRef = useRef(null);
-  const startLabelRef = useRef(null);
-  const endLabelRef = useRef(null);
+  const trimContainerRef = useRef(null);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [detectionMessage, setDetectionMessage] = useState('');
+  const [dragging, setDragging] = useState(null); // 'start' | 'end' | null
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -31,15 +30,20 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     return parseFloat(timeStr) || 0;
   };
 
-  // Update floating time labels on region handles
-  const updateHandleLabels = useCallback((start, end) => {
-    if (startLabelRef.current) {
-      startLabelRef.current.textContent = formatTime(start);
-    }
-    if (endLabelRef.current) {
-      endLabelRef.current.textContent = formatTime(end);
-    }
-  }, []);
+  // Convert pixel position to time
+  const pxToTime = useCallback((px) => {
+    const container = trimContainerRef.current;
+    if (!container || !duration) return 0;
+    const rect = container.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (px - rect.left) / rect.width));
+    return ratio * duration;
+  }, [duration]);
+
+  // Convert time to percentage
+  const timeToPct = useCallback((time) => {
+    if (!duration) return 0;
+    return (time / duration) * 100;
+  }, [duration]);
 
   // Stop playback when it reaches the end marker
   const checkBounds = useCallback(() => {
@@ -60,88 +64,98 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     return () => clearInterval(iv);
   }, [isPlaying, checkBounds]);
 
-  // Style region handles after creation
-  const styleRegionHandles = useCallback(() => {
-    const container = waveformRef.current;
-    if (!container) return;
+  // Drag handlers for trim bars
+  const handleMouseDown = useCallback((which) => (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragging(which);
+  }, []);
 
-    // Find region element
-    const regionEl = container.querySelector('[part="region"]') || container.querySelector('[data-id]')?.closest('[part="region"]');
-    
-    // Style all handle elements within the waveform
-    const handles = container.querySelectorAll('[data-resize]');
-    
-    handles.forEach((handle, i) => {
-      handle.style.width = '24px';
-      handle.style.background = '#e94560';
-      handle.style.borderRadius = '6px';
-      handle.style.border = '3px solid #f25a74';
-      handle.style.cursor = 'ew-resize';
-      handle.style.zIndex = '10';
-      handle.style.opacity = '1';
-      handle.style.boxShadow = '0 0 12px rgba(233,69,96,0.6)';
-      handle.style.transition = 'box-shadow 0.2s';
-      
-      // Add hover effect
-      handle.addEventListener('mouseenter', () => {
-        handle.style.boxShadow = '0 0 20px rgba(233,69,96,0.9)';
-        handle.style.background = '#f25a74';
-      });
-      handle.addEventListener('mouseleave', () => {
-        handle.style.boxShadow = '0 0 12px rgba(233,69,96,0.6)';
-        handle.style.background = '#e94560';
-      });
+  const handleMouseMove = useCallback((e) => {
+    if (!dragging) return;
+    const time = pxToTime(e.clientX);
+    const rounded = Math.round(time * 10) / 10;
 
-      // Add time label above handle
-      if (!handle.querySelector('.handle-label')) {
-        const label = document.createElement('div');
-        label.className = 'handle-label';
-        label.style.cssText = `
-          position: absolute;
-          top: -28px;
-          left: 50%;
-          transform: translateX(-50%);
-          background: #e94560;
-          color: white;
-          font-size: 11px;
-          font-weight: 700;
-          font-family: monospace;
-          padding: 2px 8px;
-          border-radius: 4px;
-          white-space: nowrap;
-          pointer-events: none;
-          z-index: 20;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-        `;
-        handle.style.position = 'relative';
-        handle.style.overflow = 'visible';
-        handle.appendChild(label);
-        
-        if (i === 0) {
-          startLabelRef.current = label;
-          label.textContent = formatTime(project.climaxStart);
-        } else {
-          endLabelRef.current = label;
-          label.textContent = formatTime(project.climaxEnd);
-        }
-      }
-    });
-  }, [project.climaxStart, project.climaxEnd]);
+    if (dragging === 'start') {
+      const maxStart = project.climaxEnd - 5; // minimum 5s gap
+      const clamped = Math.max(0, Math.min(rounded, maxStart));
+      updateProject({ climaxStart: clamped });
+    } else if (dragging === 'end') {
+      const minEnd = project.climaxStart + 5;
+      const clamped = Math.max(minEnd, Math.min(rounded, duration));
+      updateProject({ climaxEnd: clamped });
+    }
+  }, [dragging, pxToTime, project.climaxStart, project.climaxEnd, duration, updateProject]);
 
+  const handleMouseUp = useCallback(() => {
+    if (dragging) {
+      setDragging(null);
+    }
+  }, [dragging]);
+
+  // Attach global mouse listeners while dragging
+  useEffect(() => {
+    if (dragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [dragging, handleMouseMove, handleMouseUp]);
+
+  // Touch support for mobile
+  const handleTouchStart = useCallback((which) => (e) => {
+    e.stopPropagation();
+    setDragging(which);
+  }, []);
+
+  const handleTouchMove = useCallback((e) => {
+    if (!dragging) return;
+    const touch = e.touches[0];
+    const time = pxToTime(touch.clientX);
+    const rounded = Math.round(time * 10) / 10;
+    if (dragging === 'start') {
+      const clamped = Math.max(0, Math.min(rounded, project.climaxEnd - 5));
+      updateProject({ climaxStart: clamped });
+    } else if (dragging === 'end') {
+      const clamped = Math.max(project.climaxStart + 5, Math.min(rounded, duration));
+      updateProject({ climaxEnd: clamped });
+    }
+  }, [dragging, pxToTime, project.climaxStart, project.climaxEnd, duration, updateProject]);
+
+  const handleTouchEnd = useCallback(() => {
+    setDragging(null);
+  }, []);
+
+  useEffect(() => {
+    if (dragging) {
+      window.addEventListener('touchmove', handleTouchMove, { passive: false });
+      window.addEventListener('touchend', handleTouchEnd);
+    }
+    return () => {
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [dragging, handleTouchMove, handleTouchEnd]);
+
+  // Initialize WaveSurfer (no regions plugin needed for visual)
   useEffect(() => {
     let cancelled = false;
     let ws = null;
 
     const initWaveSurfer = async () => {
       if (!project.audioUrl || !waveformRef.current) return;
-
       await new Promise(resolve => setTimeout(resolve, 100));
       if (cancelled) return;
 
       try {
         const WaveSurfer = (await import('wavesurfer.js')).default;
-        const RegionsPlugin = (await import('wavesurfer.js/dist/plugins/regions.js')).default;
-
         if (cancelled) return;
 
         if (wavesurferRef.current) {
@@ -154,67 +168,32 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
           waveColor: '#4a4a5a',
           progressColor: '#e94560',
           cursorColor: '#f8f8f8',
-          cursorWidth: 3,
+          cursorWidth: 2,
           height: 140,
           barWidth: 3,
           barGap: 1,
           barRadius: 3,
           responsive: true,
           normalize: true,
+          interact: true,
         });
-
-        const regions = ws.registerPlugin(RegionsPlugin.create());
 
         ws.on('ready', () => {
           if (cancelled) return;
           const dur = ws.getDuration();
           setDuration(dur);
           setIsReady(true);
-
-          const start = project.climaxStart || 0;
-          const end = Math.min(project.climaxEnd || 30, dur);
-
-          const region = regions.addRegion({
-            start,
-            end,
-            color: 'rgba(233, 69, 96, 0.20)',
-            drag: true,
-            resize: true,
-          });
-          regionRef.current = region;
-
-          // Style handles after a short delay to let DOM render
-          setTimeout(() => {
-            styleRegionHandles();
-            updateHandleLabels(start, end);
-          }, 200);
-
-          region.on('update', () => {
-            updateHandleLabels(region.start, region.end);
-          });
-
-          region.on('update-end', () => {
-            const newStart = Math.round(region.start * 10) / 10;
-            const newEnd = Math.round(region.end * 10) / 10;
-            updateProject({
-              climaxStart: newStart,
-              climaxEnd: newEnd,
-            });
-            updateHandleLabels(newStart, newEnd);
-          });
+          // Ensure climaxEnd doesn't exceed duration
+          if (project.climaxEnd > dur) {
+            updateProject({ climaxEnd: dur });
+          }
         });
 
-        ws.on('audioprocess', () => {
-          setCurrentTime(ws.getCurrentTime());
-        });
-
+        ws.on('audioprocess', () => setCurrentTime(ws.getCurrentTime()));
         ws.on('play', () => setIsPlaying(true));
         ws.on('pause', () => setIsPlaying(false));
         ws.on('finish', () => setIsPlaying(false));
-
-        ws.on('interaction', () => {
-          setCurrentTime(ws.getCurrentTime());
-        });
+        ws.on('interaction', () => setCurrentTime(ws.getCurrentTime()));
 
         // Load audio
         try {
@@ -243,9 +222,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
 
         wavesurferRef.current = ws;
       } catch (err) {
-        if (!cancelled) {
-          console.error('Failed to initialize WaveSurfer:', err);
-        }
+        if (!cancelled) console.error('Failed to initialize WaveSurfer:', err);
       }
     };
 
@@ -262,11 +239,9 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
 
   const regionDuration = project.climaxEnd - project.climaxStart;
 
-  // ALWAYS play from climax start, stop at climax end
   const handlePlayPause = () => {
     const ws = wavesurferRef.current;
     if (!ws) return;
-
     if (isPlaying) {
       ws.pause();
     } else {
@@ -278,23 +253,11 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
 
   const handleAutoDetect = async () => {
     if (!projectId) return;
-
     setDetecting(true);
     setDetectionMessage('');
-
     try {
       const { data } = await api.post(`/audio/detect-climax/${projectId}`, {});
-
-      updateProject({
-        climaxStart: data.start,
-        climaxEnd: data.end
-      });
-
-      if (regionRef.current) {
-        regionRef.current.setOptions({ start: data.start, end: data.end });
-      }
-      updateHandleLabels(data.start, data.end);
-
+      updateProject({ climaxStart: data.start, climaxEnd: data.end });
       setDetectionMessage(data.message);
     } catch (err) {
       console.error('Climax detection failed:', err);
@@ -308,10 +271,6 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     const newStart = parseTime(e.target.value);
     if (newStart < project.climaxEnd && newStart >= 0) {
       updateProject({ climaxStart: newStart });
-      if (regionRef.current) {
-        regionRef.current.setOptions({ start: newStart });
-      }
-      updateHandleLabels(newStart, project.climaxEnd);
       if (wavesurferRef.current) {
         wavesurferRef.current.setTime(newStart);
         setCurrentTime(newStart);
@@ -323,10 +282,6 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     const newEnd = parseTime(e.target.value);
     if (newEnd > project.climaxStart && newEnd <= duration) {
       updateProject({ climaxEnd: newEnd });
-      if (regionRef.current) {
-        regionRef.current.setOptions({ end: newEnd });
-      }
-      updateHandleLabels(project.climaxStart, newEnd);
     }
   };
 
@@ -334,41 +289,250 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <Waves className="w-16 h-16 text-[#2a2a35] mb-4" />
-        <h3 className="font-heading text-xl font-semibold text-[#f8f8f8] mb-2">
-          No Audio Uploaded
-        </h3>
-        <p className="text-[#8b8b99]">
-          Go back to Step 1 and upload an audio file to select the climax.
-        </p>
+        <h3 className="font-heading text-xl font-semibold text-[#f8f8f8] mb-2">No Audio Uploaded</h3>
+        <p className="text-[#8b8b99]">Go back to Step 1 and upload an audio file to select the climax.</p>
       </div>
     );
   }
 
+  const startPct = timeToPct(project.climaxStart);
+  const endPct = timeToPct(project.climaxEnd);
+  const playheadPct = timeToPct(currentTime);
+
   return (
     <div className="space-y-6">
       <div className="text-center mb-8">
-        <h2 className="font-heading text-2xl font-bold text-[#f8f8f8] mb-2">
-          Select Climax
-        </h2>
-        <p className="text-[#8b8b99]">
-          Choose the 30-50 second highlight of your song for the video
-        </p>
+        <h2 className="font-heading text-2xl font-bold text-[#f8f8f8] mb-2">Select Climax</h2>
+        <p className="text-[#8b8b99]">Choose the 30-50 second highlight of your song for the video</p>
       </div>
 
-      {/* Waveform */}
+      {/* Waveform + Trim Bars */}
       <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-6">
         <div
-          ref={waveformRef}
-          className="w-full bg-[#0c0c0f] rounded-lg p-4 pt-10 cursor-pointer"
-          style={{ minHeight: 160, position: 'relative', overflow: 'visible' }}
-          data-testid="waveform"
-        />
+          ref={trimContainerRef}
+          className="relative w-full select-none"
+          style={{ minHeight: 200 }}
+          data-testid="waveform-trim-container"
+        >
+          {/* Waveform canvas */}
+          <div
+            ref={waveformRef}
+            className="w-full bg-[#0c0c0f] rounded-lg"
+            style={{ height: 140, pointerEvents: dragging ? 'none' : 'auto' }}
+            data-testid="waveform"
+          />
 
-        {/* Visual handle indicators below waveform */}
+          {/* Overlay: dimmed regions outside selection */}
+          {isReady && (
+            <>
+              {/* Left dim */}
+              <div
+                className="absolute top-0 left-0 rounded-l-lg"
+                style={{
+                  width: `${startPct}%`,
+                  height: 140,
+                  background: 'rgba(0,0,0,0.55)',
+                  pointerEvents: 'none',
+                  zIndex: 2,
+                }}
+              />
+              {/* Right dim */}
+              <div
+                className="absolute top-0 right-0 rounded-r-lg"
+                style={{
+                  width: `${100 - endPct}%`,
+                  height: 140,
+                  background: 'rgba(0,0,0,0.55)',
+                  pointerEvents: 'none',
+                  zIndex: 2,
+                }}
+              />
+              {/* Selected region highlight (top + bottom border) */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: `${startPct}%`,
+                  width: `${endPct - startPct}%`,
+                  height: 140,
+                  borderTop: '3px solid #e94560',
+                  borderBottom: '3px solid #e94560',
+                  background: 'rgba(233,69,96,0.08)',
+                  pointerEvents: 'none',
+                  zIndex: 3,
+                }}
+              />
+
+              {/* ===== LEFT TRIM BAR (Start) ===== */}
+              <div
+                onMouseDown={handleMouseDown('start')}
+                onTouchStart={handleTouchStart('start')}
+                className="absolute top-0 group"
+                style={{
+                  left: `${startPct}%`,
+                  height: 140,
+                  zIndex: 10,
+                  transform: 'translateX(-50%)',
+                  cursor: 'ew-resize',
+                  touchAction: 'none',
+                }}
+                data-testid="trim-bar-start"
+              >
+                {/* Invisible wide grab area */}
+                <div style={{ position: 'absolute', top: 0, left: -16, width: 32, height: '100%' }} />
+                {/* Visible bar line */}
+                <div
+                  className="transition-all"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: -2,
+                    width: 4,
+                    height: '100%',
+                    background: dragging === 'start' ? '#f25a74' : '#e94560',
+                    borderRadius: 2,
+                    boxShadow: dragging === 'start'
+                      ? '0 0 16px rgba(233,69,96,0.8)'
+                      : '0 0 8px rgba(233,69,96,0.5)',
+                  }}
+                />
+                {/* Handle grip (center circle) */}
+                <div
+                  className="transition-all"
+                  style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    background: dragging === 'start' ? '#f25a74' : '#e94560',
+                    border: '3px solid #fff',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 11,
+                  }}
+                >
+                  <div style={{ width: 2, height: 10, background: '#fff', borderRadius: 1, marginRight: 2 }} />
+                  <div style={{ width: 2, height: 10, background: '#fff', borderRadius: 1 }} />
+                </div>
+                {/* Time label */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: -32,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: '#e94560',
+                    color: '#fff',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    fontFamily: 'monospace',
+                    padding: '3px 8px',
+                    borderRadius: 4,
+                    whiteSpace: 'nowrap',
+                    pointerEvents: 'none',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                    zIndex: 12,
+                  }}
+                  data-testid="trim-label-start"
+                >
+                  {formatTime(project.climaxStart)}
+                </div>
+              </div>
+
+              {/* ===== RIGHT TRIM BAR (End) ===== */}
+              <div
+                onMouseDown={handleMouseDown('end')}
+                onTouchStart={handleTouchStart('end')}
+                className="absolute top-0 group"
+                style={{
+                  left: `${endPct}%`,
+                  height: 140,
+                  zIndex: 10,
+                  transform: 'translateX(-50%)',
+                  cursor: 'ew-resize',
+                  touchAction: 'none',
+                }}
+                data-testid="trim-bar-end"
+              >
+                {/* Invisible wide grab area */}
+                <div style={{ position: 'absolute', top: 0, left: -16, width: 32, height: '100%' }} />
+                {/* Visible bar line */}
+                <div
+                  className="transition-all"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: -2,
+                    width: 4,
+                    height: '100%',
+                    background: dragging === 'end' ? '#f25a74' : '#e94560',
+                    borderRadius: 2,
+                    boxShadow: dragging === 'end'
+                      ? '0 0 16px rgba(233,69,96,0.8)'
+                      : '0 0 8px rgba(233,69,96,0.5)',
+                  }}
+                />
+                {/* Handle grip (center circle) */}
+                <div
+                  className="transition-all"
+                  style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    background: dragging === 'end' ? '#f25a74' : '#e94560',
+                    border: '3px solid #fff',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 11,
+                  }}
+                >
+                  <div style={{ width: 2, height: 10, background: '#fff', borderRadius: 1, marginRight: 2 }} />
+                  <div style={{ width: 2, height: 10, background: '#fff', borderRadius: 1 }} />
+                </div>
+                {/* Time label */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: -32,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: '#e94560',
+                    color: '#fff',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    fontFamily: 'monospace',
+                    padding: '3px 8px',
+                    borderRadius: 4,
+                    whiteSpace: 'nowrap',
+                    pointerEvents: 'none',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                    zIndex: 12,
+                  }}
+                  data-testid="trim-label-end"
+                >
+                  {formatTime(project.climaxEnd)}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Info bar below waveform */}
         <div className="flex items-center justify-between mt-4 px-2">
           <div className="flex items-center gap-2">
-            <div className="w-5 h-5 bg-[#e94560] rounded" />
-            <span className="text-xs text-[#8b8b99]">Drag handles to adjust selection</span>
+            <div className="w-4 h-4 rounded-full bg-[#e94560] border-2 border-white" />
+            <span className="text-xs text-[#8b8b99]">Drag the trim bars to adjust start & end</span>
           </div>
           <div className="flex items-center gap-4 text-sm">
             <span className="text-[#8b8b99]">
@@ -389,15 +553,9 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
             data-testid="play-pause-button"
           >
             {isPlaying ? (
-              <>
-                <Pause className="w-5 h-5" />
-                Pause
-              </>
+              <><Pause className="w-5 h-5" /> Pause</>
             ) : (
-              <>
-                <Play className="w-5 h-5" fill="white" />
-                Play Selection
-              </>
+              <><Play className="w-5 h-5" fill="white" /> Play Selection</>
             )}
           </button>
         </div>
@@ -460,15 +618,9 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
           data-testid="auto-detect-button"
         >
           {detecting ? (
-            <>
-              <Loader2 className="w-5 h-5 text-[#e94560] animate-spin" />
-              Analyzing audio...
-            </>
+            <><Loader2 className="w-5 h-5 text-[#e94560] animate-spin" /> Analyzing audio...</>
           ) : (
-            <>
-              <Wand2 className="w-5 h-5 text-[#e94560]" />
-              Auto-detect Climax
-            </>
+            <><Wand2 className="w-5 h-5 text-[#e94560]" /> Auto-detect Climax</>
           )}
         </button>
         {detectionMessage && (
@@ -482,11 +634,12 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
       <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-4">
         <h4 className="font-medium text-[#f8f8f8] mb-2">How to use:</h4>
         <ul className="text-sm text-[#8b8b99] space-y-1">
-          <li>• Drag the <strong className="text-[#e94560]">red handles</strong> on the waveform to set start/end points</li>
-          <li>• Drag the highlighted region to move the entire selection</li>
-          <li>• <strong>Play Selection</strong> plays only the selected region</li>
-          <li>• Type exact times (format: m:ss) in the fields below</li>
-          <li>• Use "Auto-detect" to find the most energetic 40-second section</li>
+          <li>Drag the <strong className="text-[#e94560]">left trim bar</strong> to set the start point</li>
+          <li>Drag the <strong className="text-[#e94560]">right trim bar</strong> to set the end point</li>
+          <li>The highlighted area between bars is your selected region</li>
+          <li><strong>Play Selection</strong> plays only the highlighted region</li>
+          <li>Type exact times (m:ss) in the fields below the waveform</li>
+          <li>Use "Auto-detect" to find the most energetic 40-second section</li>
         </ul>
       </div>
     </div>

@@ -1,7 +1,7 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Search, Upload, ImageIcon, Film, Loader2, X, GripVertical,
-  Play, Check, Trash2, Clock, Wand2, Copy, CheckCheck
+  Play, Check, Trash2, Clock, Wand2, Copy, CheckCheck, AlertTriangle
 } from 'lucide-react';
 import api from '../../lib/api';
 import { AuthImage, AuthVideo } from '../AuthImage';
@@ -20,9 +20,23 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
   const [error, setError] = useState('');
   const [generatingPrompts, setGeneratingPrompts] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
+  const [hasPexelsKey, setHasPexelsKey] = useState(null); // null = loading, true/false
   const fileInputRef = useRef(null);
 
   const media = project.media || [];
+
+  // Check if Pexels key is configured on mount
+  useEffect(() => {
+    const checkPexelsKey = async () => {
+      try {
+        const { data } = await api.get('/auth/test-keys');
+        setHasPexelsKey(!!data.pexels);
+      } catch {
+        setHasPexelsKey(false);
+      }
+    };
+    checkPexelsKey();
+  }, []);
 
   const ensureProject = async () => {
     if (projectId) return projectId;
@@ -354,23 +368,38 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
       {/* Stock Search Tab */}
       {activeTab === 'stock' && (
         <div className="bg-[#141418] border border-[#2a2a35] rounded-xl p-5 space-y-4">
+          {/* Pexels Key Missing Banner */}
+          {hasPexelsKey === false && (
+            <div className="flex items-start gap-3 bg-[#f59e0b]/10 border border-[#f59e0b]/30 rounded-lg p-4" data-testid="pexels-key-missing-banner">
+              <AlertTriangle className="w-5 h-5 text-[#f59e0b] flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-[#f59e0b] font-medium text-sm">Pexels API Key Required</p>
+                <p className="text-[#8b8b99] text-xs mt-1">
+                  Add your free Pexels API key in <strong className="text-[#f8f8f8]">Settings</strong> to search stock photos & videos.
+                  Get one at <a href="https://www.pexels.com/api/new/" target="_blank" rel="noopener noreferrer" className="text-[#00b4d8] underline">pexels.com/api</a>
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Search Bar */}
           <div className="flex gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8b99]" />
               <input
                 type="text"
-                placeholder="Search Pexels (e.g. cinematic rain, city lights, emotional portrait...)"
+                placeholder={hasPexelsKey === false ? "Pexels API key required — add it in Settings" : "Search Pexels (e.g. cinematic rain, city lights, emotional portrait...)"}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch(1)}
-                className="w-full pl-10 pr-4 py-2.5 bg-[#0c0c0f] border border-[#2a2a35] rounded-lg text-[#f8f8f8] text-sm focus:outline-none focus:border-[#00b4d8]"
+                onKeyDown={(e) => e.key === 'Enter' && hasPexelsKey && handleSearch(1)}
+                disabled={hasPexelsKey === false}
+                className="w-full pl-10 pr-4 py-2.5 bg-[#0c0c0f] border border-[#2a2a35] rounded-lg text-[#f8f8f8] text-sm focus:outline-none focus:border-[#00b4d8] disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="stock-search-input"
               />
             </div>
             <button
               onClick={() => handleSearch(1)}
-              disabled={searching || !searchQuery.trim()}
+              disabled={searching || !searchQuery.trim() || hasPexelsKey === false}
               className="px-5 py-2.5 bg-[#00b4d8] text-white rounded-lg hover:bg-[#0096b7] text-sm font-medium disabled:opacity-50 transition-all"
               data-testid="stock-search-button"
             >

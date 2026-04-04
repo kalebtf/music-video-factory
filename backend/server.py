@@ -387,11 +387,13 @@ async def test_keys(request: Request):
     falai_encrypted = api_keys.get("falai", "")
     gemini_encrypted = api_keys.get("gemini", "")
     together_encrypted = api_keys.get("together", "")
+    pexels_encrypted = api_keys.get("pexels", "")
     
     openai_ok = False
     falai_ok = False
     gemini_ok = False
     together_ok = False
+    pexels_ok = False
     
     if openai_encrypted:
         decrypted = decrypt_api_key(openai_encrypted)
@@ -409,9 +411,17 @@ async def test_keys(request: Request):
         decrypted = decrypt_api_key(together_encrypted)
         together_ok = bool(decrypted and len(decrypted) > 5)
     
-    logger.info(f"[AUTH] test-keys for {user.get('email')}: openai={openai_ok}, falai={falai_ok}, gemini={gemini_ok}, together={together_ok}")
+    if pexels_encrypted:
+        decrypted = decrypt_api_key(pexels_encrypted)
+        pexels_ok = bool(decrypted and len(decrypted) > 5)
     
-    return {"openai": openai_ok, "falai": falai_ok, "gemini": gemini_ok, "together": together_ok}
+    # Also check server-level default Pexels key
+    if not pexels_ok and DEFAULT_PEXELS_KEY:
+        pexels_ok = True
+    
+    logger.info(f"[AUTH] test-keys for {user.get('email')}: openai={openai_ok}, falai={falai_ok}, gemini={gemini_ok}, together={together_ok}, pexels={pexels_ok}")
+    
+    return {"openai": openai_ok, "falai": falai_ok, "gemini": gemini_ok, "together": together_ok, "pexels": pexels_ok}
 
 @api_router.post("/auth/refresh")
 async def refresh_token(request: Request, response: Response):
@@ -2313,7 +2323,7 @@ class AnimateImageRequest(BaseModel):
     projectId: str
     imageIndex: int
     imagePath: str
-    prompt: str
+    prompt: Optional[str] = "cinematic smooth camera movement, emotional, high quality"
 
 @api_router.post("/ai/animate-image")
 async def animate_image(data: AnimateImageRequest, request: Request):
