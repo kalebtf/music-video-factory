@@ -96,12 +96,20 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
             while (!animDone && attempts < 60) {
               await new Promise(r => setTimeout(r, 3000));
               const { data: statusData } = await api.get(`/ai/animation-status/${data.requestId}`, {
-                params: { projectId, imageIndex: i }
+                params: { project_id: projectId, image_index: i }
               });
-              if (statusData.status === 'completed' && statusData.clipPath) {
+              if (statusData.status === 'COMPLETED' && statusData.clipPath) {
                 preparedClipPaths.push(statusData.clipPath);
                 animDone = true;
-              } else if (statusData.status === 'failed') {
+              } else if (statusData.status === 'COMPLETED' && statusData.error) {
+                // Completed but no video — fallback to still
+                const { data: stillData } = await api.post(`/projects/${projectId}/media/still-to-clip`, {
+                  imagePath: item.localPath,
+                  duration: item.stillDuration || 4,
+                });
+                preparedClipPaths.push(stillData.clipPath);
+                animDone = true;
+              } else if (statusData.status === 'ERROR') {
                 // Fallback to still
                 const { data: stillData } = await api.post(`/projects/${projectId}/media/still-to-clip`, {
                   imagePath: item.localPath,
