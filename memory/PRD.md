@@ -33,11 +33,10 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - [x] Left bar = start, Right bar = end, independently draggable
 - [x] Middle region draggable — moves entire selection without resizing
 - [x] Click inside region = seek + play from that position
-- [x] Time labels, highlighted range, touch support
 
 ### Hooks System (Done)
-- [x] Clip-aligned distribution: hooks mapped to specific clip indices, not just time segments
-- [x] Formula: round(i * (numClips-1) / max(numHooks-1, 1)) — evenly spaces hooks across clips
+- [x] Clip-aligned distribution: hooks mapped to specific clip indices
+- [x] Formula: round(i * (numClips-1) / max(numHooks-1, 1))
 - [x] MIN_HOOK_DURATION = 2.5s — each hook stays readable
 - [x] No repeats; extras dropped if more hooks than clips
 
@@ -47,14 +46,18 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - [x] Color: White, Yellow, Red, Cyan, Lime
 - [x] Position: Top / Middle / Bottom
 - [x] Style: Shadow, Outline, Glow, None
-- [x] All applied via FFmpeg drawtext filters with font files
+- [x] **Animation: None, Fade, Slide Up, Slide Down, Pop, Bounce**
+  - Fade: smooth alpha in/out over 0.6s
+  - Slide Up: rises from +60px below with fade
+  - Slide Down: drops from -60px above with fade
+  - Pop: quick 0.3s appear with slight upward bounce
+  - Bounce: drops from 80px above with quadratic deceleration
+- [x] All applied via FFmpeg drawtext alpha + y expressions
 
 ### Assembly System (Done)
-- [x] Async background job with polling
-- [x] Polling 401 resilient — catches auth errors, silently retries (max 10)
+- [x] Async background job with polling (401-resilient)
 - [x] FFmpeg auto-install on backend startup
-- [x] Crossfade duration slider
-- [x] Subtitle overlays from lyrics
+- [x] Crossfade duration slider, subtitle overlays
 
 ### Phase 2: Metadata Generation (Done)
 - [x] GPT-4o-mini metadata for TikTok, YouTube Shorts, Instagram Reels, Facebook Reels
@@ -62,21 +65,10 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 ## Test Credentials
 - Email: test@example.com | Password: test123456
 
-## Key Backend Endpoints
-- POST /api/projects/{id}/media/still-to-clip — effect param (20 options)
-- GET /api/effects/list — 20 effects, 3 transitions, 6 presets
-- POST /api/video/assemble — async, accepts textFont/textSize/textColor/textPosition/textStyle
-- GET /api/auth/test-keys — includes pexels status
-
-## Architecture Note
-- AI Mode path: Uses FAL.AI for animation, Together AI for images, OpenAI for prompts
-- Library Mode path: Uses FFmpeg for all clip creation, no external AI API calls for video
-- server.py is monolithic (~3200 lines) — refactoring deferred per user request
-
 ## Next Tasks / Backlog
-- [ ] Text entrance/exit animations (fade, slide text in) (P2)
 - [ ] Exact subtitle sync via Whisper (word-level timestamps) (P2)
 - [ ] Manual video trim in/out selection for stock clips (P2)
+- [ ] Auto-suggest effects by song mood (P2)
 - [ ] Direct publishing to TikTok, YouTube, Instagram (P3)
 - [ ] Kling API integration (P3)
 - [ ] Refactor server.py into route modules (Deferred)
