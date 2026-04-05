@@ -544,12 +544,20 @@ async def get_pexels_key(user_id: str) -> str:
                 return key
     return DEFAULT_PEXELS_KEY
 
+PEXELS_CACHE_TTL_HOURS = 24
+
 @api_router.get("/stock/search/photos")
 async def search_stock_photos(request: Request, query: str, page: int = 1, per_page: int = 20):
     user = await get_current_user(request)
     pexels_key = await get_pexels_key(user["_id"])
     if not pexels_key:
         raise HTTPException(status_code=400, detail="No Pexels API key configured. Add one in Settings or contact the admin.")
+
+    cache_key = f"photos:{query.lower().strip()}:{page}:{per_page}"
+    cached = await db.pexels_cache.find_one({"cache_key": cache_key}, {"_id": 0})
+    if cached and cached.get("expires_at", datetime.min.replace(tzinfo=timezone.utc)) > datetime.now(timezone.utc):
+        logger.info(f"[PEXELS CACHE HIT] photos query='{query}' page={page}")
+        return cached["result"]
 
     async with httpx.AsyncClient() as client_http:
         resp = await client_http.get(
@@ -576,12 +584,19 @@ async def search_stock_photos(request: Request, query: str, page: int = 1, per_p
             "pexelsUrl": p.get("url", ""),
         })
 
-    return {
+    result = {
         "photos": photos,
         "page": data.get("page", page),
         "totalResults": data.get("total_results", 0),
         "hasMore": page * per_page < data.get("total_results", 0)
     }
+    await db.pexels_cache.update_one(
+        {"cache_key": cache_key},
+        {"$set": {"cache_key": cache_key, "result": result, "expires_at": datetime.now(timezone.utc) + timedelta(hours=PEXELS_CACHE_TTL_HOURS)}},
+        upsert=True
+    )
+    logger.info(f"[PEXELS CACHE MISS] photos query='{query}' page={page} — cached")
+    return result
 
 @api_router.get("/stock/search/videos")
 async def search_stock_videos(request: Request, query: str, page: int = 1, per_page: int = 15):
@@ -589,6 +604,12 @@ async def search_stock_videos(request: Request, query: str, page: int = 1, per_p
     pexels_key = await get_pexels_key(user["_id"])
     if not pexels_key:
         raise HTTPException(status_code=400, detail="No Pexels API key configured. Add one in Settings or contact the admin.")
+
+    cache_key = f"videos:{query.lower().strip()}:{page}:{per_page}"
+    cached = await db.pexels_cache.find_one({"cache_key": cache_key}, {"_id": 0})
+    if cached and cached.get("expires_at", datetime.min.replace(tzinfo=timezone.utc)) > datetime.now(timezone.utc):
+        logger.info(f"[PEXELS CACHE HIT] videos query='{query}' page={page}")
+        return cached["result"]
 
     async with httpx.AsyncClient() as client_http:
         resp = await client_http.get(
@@ -603,7 +624,6 @@ async def search_stock_videos(request: Request, query: str, page: int = 1, per_p
 
     videos = []
     for v in data.get("videos", []):
-        # Pick best HD video file
         video_files = v.get("video_files", [])
         best_file = None
         for vf in sorted(video_files, key=lambda x: x.get("height", 0), reverse=True):
@@ -626,12 +646,19 @@ async def search_stock_videos(request: Request, query: str, page: int = 1, per_p
             "pexelsUrl": v.get("url", ""),
         })
 
-    return {
+    result = {
         "videos": videos,
         "page": data.get("page", page),
         "totalResults": data.get("total_results", 0),
         "hasMore": page * per_page < data.get("total_results", 0)
     }
+    await db.pexels_cache.update_one(
+        {"cache_key": cache_key},
+        {"$set": {"cache_key": cache_key, "result": result, "expires_at": datetime.now(timezone.utc) + timedelta(hours=PEXELS_CACHE_TTL_HOURS)}},
+        upsert=True
+    )
+    logger.info(f"[PEXELS CACHE MISS] videos query='{query}' page={page} — cached")
+    return result
 
 # ========================================
 # MEDIA MANAGEMENT (Library Mode)
@@ -2827,6 +2854,44 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         else:
             filter_parts.append("fade=t=in:st=0:d=1")
 
+        # Visual Identity Layer — Library mode only
+        # Applied AFTER fades but BEFORE text so text stays crisp
+        is_library_mode = bool(data.libraryClipPaths)
+        video_style = data.videoStyle or "none"
+        if is_library_mode and video_style != "none":
+            style_filters = {
+                "cinematic_warm": [
+                    "eq=contrast=1.1:brightness=0.02:saturation=1.15",
+                    "colorbalance=rs=0.05:gs=-0.02:bs=-0.08:rm=0.04:gm=0.0:bm=-0.05",
+                    "vignette=PI/5",
+                ],
+                "dreamy": [
+                    "eq=contrast=0.92:brightness=0.04:saturation=0.8",
+                    "colorbalance=rs=0.03:gs=0.02:bs=0.06:rh=0.02:gh=0.01:bh=0.05",
+                    "gblur=sigma=0.6",
+                    "vignette=PI/4",
+                ],
+                "vintage": [
+                    "eq=contrast=1.05:brightness=-0.01:saturation=0.65",
+                    "colorbalance=rs=0.08:gs=0.04:bs=-0.06:rm=0.06:gm=0.02:bm=-0.04",
+                    "noise=alls=12:allf=t",
+                    "vignette=PI/3.5",
+                ],
+                "moody": [
+                    "eq=contrast=1.2:brightness=-0.06:saturation=0.75",
+                    "colorbalance=rs=-0.02:gs=-0.03:bs=0.06:rm=-0.01:gm=-0.02:bm=0.04",
+                    "vignette=PI/3",
+                ],
+                "raw": [
+                    "eq=contrast=1.08:saturation=1.1",
+                    "noise=alls=8:allf=t",
+                ],
+            }
+            chosen = style_filters.get(video_style, [])
+            for sf in chosen:
+                filter_parts.append(sf)
+            logger.info(f"[STYLE] Applied '{video_style}' — {len(chosen)} filters")
+
         hooks_to_show = data.hookTexts or ([data.hookText] if data.hookText else [])
         hooks_to_show = [h for h in hooks_to_show if h and h.strip()]
         effective_duration = audio_duration if audio_duration > 0 else total_clip_duration
@@ -2912,6 +2977,26 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
                 # Build one drawtext per line, vertically stacked from base_y
                 line_height = actual_fontsize + 12  # px between lines
                 # Center the block around the base position
+                total_block_height = len(lines) * line_height
+
+                # Hook readability: semi-transparent background pill behind text block
+                # Uses drawbox positioned at text area, covers all lines with padding
+                pill_pad_y = 16  # vertical padding
+                pill_w = 900  # ~83% of 1080px frame width
+                pill_h = total_block_height + pill_pad_y * 2
+                pill_x = "(w-{pw})/2".format(pw=pill_w)
+                # pill_y centers the box around base_y, accounting for block centering
+                half_block = total_block_height / 2.0
+                pill_y_expr = f"{base_y}-{half_block + pill_pad_y:.0f}"
+
+                filter_parts.append(
+                    f"drawbox=x={pill_x}:y='{pill_y_expr}'"
+                    f":w={pill_w}:h={pill_h}"
+                    f":color=black@0.5"
+                    f":t=fill"
+                    f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
+                )
+
                 for li, line_text in enumerate(lines):
                     safe_line = line_text.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
                     # Offset from center of text block
@@ -3341,6 +3426,8 @@ async def startup():
     await db.projects.create_index([("userId", 1), ("createdAt", -1)])
     await db.cost_logs.create_index([("userId", 1), ("date", -1)])
     await db.templates.create_index("userId")
+    await db.pexels_cache.create_index("cache_key", unique=True)
+    await db.pexels_cache.create_index("expires_at", expireAfterSeconds=0)
     logger.info("Database indexes created")
 
     # Log registered routes for debugging

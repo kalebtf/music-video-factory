@@ -251,6 +251,7 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
 
       if (isLibrary && libraryClipPaths) {
         payload.libraryClipPaths = libraryClipPaths;
+        payload.videoStyle = project.assemblySettings.videoStyle || 'none';
       }
 
       const { data } = await api.post('/video/assemble', payload);
@@ -618,10 +619,30 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
                 }}
                 data-testid="text-style-preview"
               >
+                {/* Style overlay tint — shows selected videoStyle in preview */}
+                {isLibrary && (() => {
+                  const vs = project.assemblySettings.videoStyle || 'none';
+                  const tints = {
+                    cinematic_warm: 'rgba(200,120,40,0.18)',
+                    dreamy: 'rgba(100,130,220,0.15)',
+                    vintage: 'rgba(160,130,70,0.2)',
+                    moody: 'rgba(30,40,90,0.25)',
+                    raw: 'rgba(180,180,180,0.08)',
+                  };
+                  const t = tints[vs];
+                  if (!t) return null;
+                  return <div className="absolute inset-0 z-[1] pointer-events-none" style={{ background: t }} />;
+                })()}
+
+                {/* Vignette overlay for styles that use it */}
+                {isLibrary && ['cinematic_warm', 'dreamy', 'vintage', 'moody'].includes(project.assemblySettings.videoStyle) && (
+                  <div className="absolute inset-0 z-[1] pointer-events-none" style={{ boxShadow: 'inset 0 0 50px 15px rgba(0,0,0,0.4)' }} />
+                )}
+
                 {/* Fake image overlay */}
                 <div className="absolute inset-0" style={{ background: 'radial-gradient(circle at 50% 40%, rgba(255,255,255,0.05) 0%, transparent 60%)' }} />
 
-                {/* Preview text */}
+                {/* Preview text with background pill */}
                 {(() => {
                   const previewText = (project.concept.selectedHooks || [])[0] || 'Sample hook text here';
                   const font = project.assemblySettings.textFont || 'sans';
@@ -647,20 +668,31 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
 
                   return (
                     <div
-                      className={`absolute left-0 right-0 px-3 text-center transition-all ${animClass}`}
+                      className={`absolute left-0 right-0 px-3 text-center transition-all z-[2] ${animClass}`}
                       style={{
                         top: topPos,
                         transform: 'translateY(-50%)',
-                        fontFamily,
-                        fontSize,
-                        fontWeight: 700,
-                        color: textColor,
-                        textShadow,
-                        lineHeight: 1.4,
-                        wordBreak: 'break-word',
                       }}
                     >
-                      {previewText}
+                      {/* Background pill */}
+                      <div
+                        className="inline-block rounded-md px-4 py-2"
+                        style={{ background: 'rgba(0,0,0,0.5)' }}
+                      >
+                        <span
+                          style={{
+                            fontFamily,
+                            fontSize,
+                            fontWeight: 700,
+                            color: textColor,
+                            textShadow,
+                            lineHeight: 1.4,
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {previewText}
+                        </span>
+                      </div>
                     </div>
                   );
                 })()}
@@ -689,6 +721,53 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
             data-testid="crossfade-slider"
           />
         </div>
+
+        {/* Video Style — Library mode only */}
+        {isLibrary && (
+          <div data-testid="video-style-section">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[#f8f8f8]">Video Style</span>
+              <span className="text-[10px] text-[#8b8b99] bg-[#2a2a35] px-1.5 py-0.5 rounded">Library</span>
+            </div>
+            <p className="text-xs text-[#8b8b99] mb-3">
+              Apply cinematic color grading to give stock footage a cohesive, branded look.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { value: 'none', label: 'None', desc: 'Original look', preview: 'transparent' },
+                { value: 'cinematic_warm', label: 'Cinematic', desc: 'Warm tones + vignette', preview: 'linear-gradient(135deg, rgba(255,140,50,0.25) 0%, rgba(180,80,40,0.15) 100%)' },
+                { value: 'dreamy', label: 'Dreamy', desc: 'Soft + lifted blues', preview: 'linear-gradient(135deg, rgba(100,140,220,0.25) 0%, rgba(180,160,220,0.2) 100%)' },
+                { value: 'vintage', label: 'Vintage', desc: 'Faded + grain', preview: 'linear-gradient(135deg, rgba(180,140,80,0.3) 0%, rgba(120,100,60,0.2) 100%)' },
+                { value: 'moody', label: 'Moody', desc: 'Dark + cool tones', preview: 'linear-gradient(135deg, rgba(40,50,100,0.35) 0%, rgba(20,30,60,0.25) 100%)' },
+                { value: 'raw', label: 'Raw', desc: 'Punchy + grain', preview: 'linear-gradient(135deg, rgba(200,200,200,0.15) 0%, rgba(150,150,150,0.1) 100%)' },
+              ].map(opt => {
+                const selected = (project.assemblySettings.videoStyle || 'none') === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    onClick={() => updateSettings('videoStyle', opt.value)}
+                    className={`relative rounded-lg p-2.5 text-left transition-all border-2 ${
+                      selected ? 'border-current text-white' : 'border-[#2a2a35] text-[#8b8b99] hover:border-[#3a3a45]'
+                    }`}
+                    style={selected ? { borderColor: accentColor } : {}}
+                    data-testid={`video-style-${opt.value}`}
+                  >
+                    <div
+                      className="w-full h-8 rounded mb-1.5"
+                      style={{
+                        background: opt.value === 'none'
+                          ? 'repeating-conic-gradient(#2a2a35 0% 25%, #1a1a22 0% 50%) 0 0 / 8px 8px'
+                          : opt.preview,
+                      }}
+                    />
+                    <span className="text-xs font-medium block">{opt.label}</span>
+                    <span className="text-[10px] text-[#666] block leading-tight">{opt.desc}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Subtitles Toggle */}
         <div className="flex items-center justify-between">
