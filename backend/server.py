@@ -2717,6 +2717,8 @@ class AssembleVideoRequest(BaseModel):
     textPosition: Optional[str] = "middle"  # top, middle, bottom
     textStyle: Optional[str] = "shadow"  # shadow, outline, glow, none
     textAnimation: Optional[str] = "fade"  # none, fade, slide_up, slide_down, pop, bounce
+    # Visual identity layer (anti-stock-footage look) — Library mode only
+    videoStyle: Optional[str] = "cinematic_warm"  # none, cinematic_warm, dreamy, vintage, moody, raw
 
 async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, project: dict):
     """Background task: runs FFmpeg assembly and updates job status."""
@@ -2833,8 +2835,9 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         font_size_map = {"small": 40, "medium": 56, "large": 72}
         txt_fontsize = font_size_map.get(data.textSize, 56)
         txt_color = data.textColor or "white"
-        pos_y_map = {"top": "h*0.08", "middle": "h*0.35", "bottom": "h*0.82"}
-        txt_y = pos_y_map.get(data.textPosition, "h*0.35")
+        # Safe margins: text never within 5% of frame edges
+        pos_y_map = {"top": "h*0.10", "middle": "h*0.38", "bottom": "h*0.78"}
+        txt_y = pos_y_map.get(data.textPosition, "h*0.38")
         # Font family (use system fonts available in the container)
         font_map = {
             "sans": "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
