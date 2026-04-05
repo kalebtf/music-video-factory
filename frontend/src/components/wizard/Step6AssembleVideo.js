@@ -554,6 +554,72 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
                 ))}
               </div>
             </div>
+
+            {/* Live Preview */}
+            <div className="mt-3 pt-3 border-t border-[#2a2a35]">
+              <p className="text-xs text-[#8b8b99] uppercase tracking-wider font-medium mb-2">Preview</p>
+              <div
+                className="relative w-full rounded-lg overflow-hidden"
+                style={{
+                  aspectRatio: '9 / 16',
+                  maxHeight: 280,
+                  background: 'linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
+                }}
+                data-testid="text-style-preview"
+              >
+                {/* Fake image overlay */}
+                <div className="absolute inset-0" style={{ background: 'radial-gradient(circle at 50% 40%, rgba(255,255,255,0.05) 0%, transparent 60%)' }} />
+
+                {/* Preview text */}
+                {(() => {
+                  const previewText = (project.concept.selectedHooks || [])[0] || 'Sample hook text here';
+                  const font = project.assemblySettings.textFont || 'sans';
+                  const size = project.assemblySettings.textSize || 'medium';
+                  const color = project.assemblySettings.textColor || 'white';
+                  const position = project.assemblySettings.textPosition || 'middle';
+                  const style = project.assemblySettings.textStyle || 'shadow';
+                  const animation = project.assemblySettings.textAnimation || 'fade';
+
+                  const fontFamily = font === 'serif' ? 'Georgia, serif' : font === 'mono' ? '"Courier New", monospace' : font === 'condensed' ? 'Arial Narrow, sans-serif' : 'system-ui, sans-serif';
+                  const fontSize = size === 'small' ? 11 : size === 'large' ? 17 : 14;
+                  const colorMap = { white: '#ffffff', yellow: '#facc15', red: '#ef4444', cyan: '#06b6d4', lime: '#84cc16' };
+                  const textColor = colorMap[color] || '#ffffff';
+                  const posMap = { top: '12%', middle: '40%', bottom: '78%' };
+                  const topPos = posMap[position] || '40%';
+
+                  let textShadow = 'none';
+                  if (style === 'shadow') textShadow = '2px 2px 4px rgba(0,0,0,0.8)';
+                  else if (style === 'outline') textShadow = '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 3px rgba(0,0,0,0.8)';
+                  else if (style === 'glow') textShadow = '0 0 8px rgba(255,255,255,0.5), 0 0 2px rgba(0,0,0,0.6)';
+
+                  const animClass = animation === 'fade' ? 'animate-pulse' : animation === 'slide_up' ? 'animate-bounce' : '';
+
+                  return (
+                    <div
+                      className={`absolute left-0 right-0 px-3 text-center transition-all ${animClass}`}
+                      style={{
+                        top: topPos,
+                        transform: 'translateY(-50%)',
+                        fontFamily,
+                        fontSize,
+                        fontWeight: 700,
+                        color: textColor,
+                        textShadow,
+                        lineHeight: 1.4,
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {previewText}
+                    </div>
+                  );
+                })()}
+
+                {/* Frame label */}
+                <div className="absolute bottom-2 left-0 right-0 text-center">
+                  <span className="text-[9px] text-[#8b8b99]/60 uppercase tracking-widest">9:16 Preview</span>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

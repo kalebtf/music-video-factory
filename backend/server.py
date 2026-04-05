@@ -2857,10 +2857,9 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         if data.addTextOverlay and hooks_to_show and effective_duration > 0:
             num_hooks = len(hooks_to_show)
             ANIM_DUR = 0.6
+            MAX_CHARS_PER_LINE = 28  # Safe width for 1080px at font sizes 40-72
 
-            # Pure timeline segmentation: divide total duration equally among hooks
-            # Each hook covers exactly effective_duration / num_hooks seconds
-            # No gaps, no overlaps, full coverage of the entire video
+            # Pure timeline segmentation
             segment_duration = effective_duration / num_hooks
             hook_timings = []
             for i in range(num_hooks):
@@ -2872,99 +2871,140 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
 
             anim = data.textAnimation or "fade"
             for start_t, end_t, hook in hook_timings:
-                safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
-                base_y = txt_y
+                # Word-wrap long text into multiple lines
+                words = hook.split()
+                lines = []
+                current_line = ""
+                for word in words:
+                    test = f"{current_line} {word}".strip() if current_line else word
+                    if len(test) <= MAX_CHARS_PER_LINE:
+                        current_line = test
+                    else:
+                        if current_line:
+                            lines.append(current_line)
+                        current_line = word
+                if current_line:
+                    lines.append(current_line)
 
-                if anim == "none":
-                    y_expr = base_y
-                    alpha_expr = "1"
-                elif anim == "fade":
-                    alpha_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
-                        f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
-                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
-                        f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
-                        f"\\,1))"
-                    )
-                    y_expr = base_y
-                elif anim == "slide_up":
-                    spx = 60
-                    alpha_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
-                        f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
-                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
-                        f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
-                        f"\\,1))"
-                    )
-                    y_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
-                        f"\\,{base_y}+{spx}*(1-(t-{start_t:.2f})/{ANIM_DUR})"
-                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
-                        f"\\,{base_y}-{spx}*(1-({end_t:.2f}-t)/{ANIM_DUR})"
-                        f"\\,{base_y}))"
-                    )
-                elif anim == "slide_down":
-                    spx = 60
-                    alpha_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
-                        f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
-                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
-                        f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
-                        f"\\,1))"
-                    )
-                    y_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
-                        f"\\,{base_y}-{spx}*(1-(t-{start_t:.2f})/{ANIM_DUR})"
-                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
-                        f"\\,{base_y}+{spx}*(1-({end_t:.2f}-t)/{ANIM_DUR})"
-                        f"\\,{base_y}))"
-                    )
-                elif anim == "pop":
-                    pd = 0.3
-                    alpha_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{pd})"
-                        f"\\,(t-{start_t:.2f})/{pd}"
-                        f"\\,if(gt(t\\,{end_t:.2f}-{pd})"
-                        f"\\,({end_t:.2f}-t)/{pd}"
-                        f"\\,1))"
-                    )
-                    y_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{pd})"
-                        f"\\,{base_y}-15*(1-(t-{start_t:.2f})/{pd})"
-                        f"\\,{base_y})"
-                    )
-                elif anim == "bounce":
-                    bd = 0.5
-                    alpha_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{bd})"
-                        f"\\,(t-{start_t:.2f})/{bd}"
-                        f"\\,if(gt(t\\,{end_t:.2f}-0.4)"
-                        f"\\,({end_t:.2f}-t)/0.4"
-                        f"\\,1))"
-                    )
-                    y_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{bd})"
-                        f"\\,{base_y}-80*(1-(t-{start_t:.2f})/{bd})*(1-(t-{start_t:.2f})/{bd})"
-                        f"\\,{base_y})"
-                    )
-                else:
-                    alpha_expr = (
-                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
-                        f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
-                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
-                        f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
-                        f"\\,1))"
-                    )
-                    y_expr = base_y
+                # If text is very long (4+ lines), reduce font size
+                actual_fontsize = txt_fontsize
+                if len(lines) >= 4:
+                    actual_fontsize = max(32, int(txt_fontsize * 0.7))
+                    # Re-wrap with slightly more chars per line
+                    wider_max = int(MAX_CHARS_PER_LINE * 1.3)
+                    lines = []
+                    current_line = ""
+                    for word in words:
+                        test = f"{current_line} {word}".strip() if current_line else word
+                        if len(test) <= wider_max:
+                            current_line = test
+                        else:
+                            if current_line:
+                                lines.append(current_line)
+                            current_line = word
+                    if current_line:
+                        lines.append(current_line)
 
-                filter_parts.append(
-                    f"drawtext=text='{safe_hook}'"
-                    f":fontsize={txt_fontsize}:fontcolor={txt_color}"
-                    f":x=(w-text_w)/2:y='{y_expr}'"
-                    f":alpha='{alpha_expr}'"
-                    f"{font_str}{style_str}"
-                    f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
-                )
+                # Build one drawtext per line, vertically stacked from base_y
+                line_height = actual_fontsize + 12  # px between lines
+                total_text_height = len(lines) * line_height
+                # Center the block around the base position
+                # base_y is an expression like "h*0.35" — compute offset for each line
+                for li, line_text in enumerate(lines):
+                    safe_line = line_text.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
+                    # Offset from center of text block
+                    line_offset = (li - (len(lines) - 1) / 2.0) * line_height
+
+                    if anim == "none":
+                        y_expr = f"{base_y}+({line_offset:.0f})"
+                        alpha_expr = "1"
+                    elif anim == "fade":
+                        alpha_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                            f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
+                            f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                            f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
+                            f"\\,1))"
+                        )
+                        y_expr = f"{base_y}+({line_offset:.0f})"
+                    elif anim == "slide_up":
+                        spx = 60
+                        alpha_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                            f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
+                            f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                            f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
+                            f"\\,1))"
+                        )
+                        y_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                            f"\\,{base_y}+({line_offset:.0f})+{spx}*(1-(t-{start_t:.2f})/{ANIM_DUR})"
+                            f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                            f"\\,{base_y}+({line_offset:.0f})-{spx}*(1-({end_t:.2f}-t)/{ANIM_DUR})"
+                            f"\\,{base_y}+({line_offset:.0f})))"
+                        )
+                    elif anim == "slide_down":
+                        spx = 60
+                        alpha_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                            f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
+                            f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                            f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
+                            f"\\,1))"
+                        )
+                        y_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                            f"\\,{base_y}+({line_offset:.0f})-{spx}*(1-(t-{start_t:.2f})/{ANIM_DUR})"
+                            f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                            f"\\,{base_y}+({line_offset:.0f})+{spx}*(1-({end_t:.2f}-t)/{ANIM_DUR})"
+                            f"\\,{base_y}+({line_offset:.0f})))"
+                        )
+                    elif anim == "pop":
+                        pd = 0.3
+                        alpha_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{pd})"
+                            f"\\,(t-{start_t:.2f})/{pd}"
+                            f"\\,if(gt(t\\,{end_t:.2f}-{pd})"
+                            f"\\,({end_t:.2f}-t)/{pd}"
+                            f"\\,1))"
+                        )
+                        y_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{pd})"
+                            f"\\,{base_y}+({line_offset:.0f})-15*(1-(t-{start_t:.2f})/{pd})"
+                            f"\\,{base_y}+({line_offset:.0f}))"
+                        )
+                    elif anim == "bounce":
+                        bd = 0.5
+                        alpha_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{bd})"
+                            f"\\,(t-{start_t:.2f})/{bd}"
+                            f"\\,if(gt(t\\,{end_t:.2f}-0.4)"
+                            f"\\,({end_t:.2f}-t)/0.4"
+                            f"\\,1))"
+                        )
+                        y_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{bd})"
+                            f"\\,{base_y}+({line_offset:.0f})-80*(1-(t-{start_t:.2f})/{bd})*(1-(t-{start_t:.2f})/{bd})"
+                            f"\\,{base_y}+({line_offset:.0f}))"
+                        )
+                    else:
+                        alpha_expr = (
+                            f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                            f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
+                            f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                            f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
+                            f"\\,1))"
+                        )
+                        y_expr = f"{base_y}+({line_offset:.0f})"
+
+                    filter_parts.append(
+                        f"drawtext=text='{safe_line}'"
+                        f":fontsize={actual_fontsize}:fontcolor={txt_color}"
+                        f":x=(w-text_w)/2:y='{y_expr}'"
+                        f":alpha='{alpha_expr}'"
+                        f"{font_str}{style_str}"
+                        f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
+                    )
 
         # Subtitle overlays — cap at MAX_SUBTITLE_LINES to prevent filter overload
         subtitles_capped = False

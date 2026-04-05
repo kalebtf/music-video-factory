@@ -73,9 +73,13 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     if (which === 'region') {
       const time = pxToTime(e.clientX);
       dragOriginRef.current = { time, climaxStart: project.climaxStart, climaxEnd: project.climaxEnd };
+      // Stop playback when dragging the whole region
+      if (isPlaying && wavesurferRef.current) {
+        wavesurferRef.current.pause();
+      }
     }
     setDragging(which);
-  }, [pxToTime, project.climaxStart, project.climaxEnd]);
+  }, [pxToTime, project.climaxStart, project.climaxEnd, isPlaying]);
 
   const handleMouseMove = useCallback((e) => {
     if (!dragging) return;
@@ -108,8 +112,8 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     if (dragging === 'region' && clickStartRef.current) {
       const dx = Math.abs(e.clientX - clickStartRef.current.x);
       const dy = Math.abs(e.clientY - clickStartRef.current.y);
-      // If barely moved, treat as click-to-seek
       if (dx < 4 && dy < 4) {
+        // Click (not drag) — seek to clicked position and play
         const time = pxToTime(e.clientX);
         if (wavesurferRef.current && time >= project.climaxStart && time <= project.climaxEnd) {
           wavesurferRef.current.setTime(time);
@@ -117,6 +121,12 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
           if (!isPlaying) {
             wavesurferRef.current.play();
           }
+        }
+      } else {
+        // Actual drag — seek to the new start of the moved region
+        if (wavesurferRef.current) {
+          wavesurferRef.current.setTime(project.climaxStart);
+          setCurrentTime(project.climaxStart);
         }
       }
     }
