@@ -2870,6 +2870,7 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
             logger.info(f"[HOOKS] {num_hooks} hooks across {effective_duration:.1f}s -> {segment_duration:.1f}s each")
 
             anim = data.textAnimation or "fade"
+            base_y = txt_y  # e.g. "h*0.35" — used in per-line y offset calculations
             for start_t, end_t, hook in hook_timings:
                 # Word-wrap long text into multiple lines
                 words = hook.split()
@@ -2907,9 +2908,7 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
 
                 # Build one drawtext per line, vertically stacked from base_y
                 line_height = actual_fontsize + 12  # px between lines
-                total_text_height = len(lines) * line_height
                 # Center the block around the base position
-                # base_y is an expression like "h*0.35" — compute offset for each line
                 for li, line_text in enumerate(lines):
                     safe_line = line_text.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
                     # Offset from center of text block

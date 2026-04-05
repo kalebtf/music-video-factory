@@ -92,15 +92,63 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
   // Prepare library media items into clips before assembly (FFmpeg effects only — no AI)
   const prepareLibraryClips = async () => {
     const preparedClipPaths = [];
+    const climaxDuration = (project.climaxEnd || 30) - (project.climaxStart || 0);
 
+    // Separate images and videos
+    const imageItems = [];
+    const videoItems = [];
+    approvedMedia.forEach((item, idx) => {
+      const isImage = item.type === 'stock-photo' || item.type === 'upload-image';
+      if (isImage) imageItems.push({ item, idx });
+      else videoItems.push({ item, idx });
+    });
+
+    // For mixed or image-only: process images normally with their set duration
+    // For video items: calculate per-video duration to match audio exactly
+    let perVideoDuration = 0;
+    let videoRepeatPlan = []; // { item, idx, duration }
+
+    if (videoItems.length > 0) {
+      // Calculate total video content duration
+      const totalVideoDuration = videoItems.reduce((sum, v) => sum + (v.item.duration || 10), 0);
+      // Audio duration we need to fill (minus time used by images)
+      const totalImageDuration = imageItems.reduce((sum, img) => sum + (img.item.stillDuration || 4), 0);
+      const audioDurForVideos = climaxDuration - totalImageDuration;
+
+      if (audioDurForVideos > 0) {
+        if (totalVideoDuration >= audioDurForVideos) {
+          // Case 2: Videos longer than audio → trim proportionally
+          const ratio = audioDurForVideos / totalVideoDuration;
+          videoItems.forEach(v => {
+            const trimmed = Math.max(2, Math.round((v.item.duration || 10) * ratio * 10) / 10);
+            videoRepeatPlan.push({ ...v, duration: trimmed });
+          });
+        } else {
+          // Case 1: Videos shorter than audio → repeat to fill
+          let filled = 0;
+          let repeatIdx = 0;
+          while (filled < audioDurForVideos) {
+            const v = videoItems[repeatIdx % videoItems.length];
+            const remaining = audioDurForVideos - filled;
+            const dur = Math.min(v.item.duration || 10, remaining);
+            if (dur < 1) break; // avoid tiny clips
+            videoRepeatPlan.push({ ...v, duration: Math.round(dur * 10) / 10 });
+            filled += dur;
+            repeatIdx++;
+            if (repeatIdx > videoItems.length * 10) break; // safety limit
+          }
+        }
+      }
+    }
+
+    // Process items in original order, then append video repeats
+    let itemIndex = 0;
     for (let i = 0; i < approvedMedia.length; i++) {
       const item = approvedMedia[i];
+      const isImage = item.type === 'stock-photo' || item.type === 'upload-image';
       setPrepareStatus(`Processing item ${i + 1} of ${approvedMedia.length}...`);
 
-      const isImage = item.type === 'stock-photo' || item.type === 'upload-image';
-
       if (isImage) {
-        // Convert image to clip with selected FFmpeg effect
         try {
           const { data } = await api.post(`/projects/${projectId}/media/still-to-clip`, {
             imagePath: item.localPath,
@@ -111,19 +159,22 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
         } catch (err) {
           console.error(`Still-to-clip failed for item ${i}:`, err);
         }
-      } else {
-        // Video — trim to climax duration
-        const climaxDuration = (project.climaxEnd || 30) - (project.climaxStart || 0);
-        const perClipDuration = Math.min(item.duration || 10, Math.ceil(climaxDuration / approvedMedia.length));
-        try {
-          const { data } = await api.post(`/projects/${projectId}/media/trim-video`, {
-            videoPath: item.localPath,
-            maxDuration: perClipDuration,
-          });
-          preparedClipPaths.push(data.clipPath);
-        } catch (err) {
-          console.error('Video trim failed:', err);
-        }
+      }
+      // Videos handled via videoRepeatPlan below
+    }
+
+    // Process video clips from the repeat plan
+    for (let vi = 0; vi < videoRepeatPlan.length; vi++) {
+      const vp = videoRepeatPlan[vi];
+      setPrepareStatus(`Processing video ${vi + 1} of ${videoRepeatPlan.length}...`);
+      try {
+        const { data } = await api.post(`/projects/${projectId}/media/trim-video`, {
+          videoPath: vp.item.localPath,
+          maxDuration: vp.duration,
+        });
+        preparedClipPaths.push(data.clipPath);
+      } catch (err) {
+        console.error('Video trim failed:', err);
       }
     }
 
