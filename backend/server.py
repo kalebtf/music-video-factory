@@ -809,7 +809,7 @@ async def still_to_clip(project_id: str, request: Request, data: dict):
     elif effect == "fade_out":
         fade_filter = f",fade=t=out:st={max(0, duration - 1.5)}:d={min(1.5, duration/2)}"
     elif effect == "blur_in":
-        fade_filter = f",fade=t=in:st=0:d=1"
+        fade_filter = ",fade=t=in:st=0:d=1"
     elif effect == "blur_out":
         fade_filter = f",fade=t=out:st={max(0, duration - 1)}:d=1"
 
@@ -2855,30 +2855,20 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         # none = no extra style
 
         if data.addTextOverlay and hooks_to_show and effective_duration > 0:
-            num_clips = len(clip_durations)
             num_hooks = len(hooks_to_show)
-            MIN_HOOK_DURATION = 2.5
             ANIM_DUR = 0.6
 
-            clip_starts = []
-            acc = 0
-            for cd in clip_durations:
-                clip_starts.append(acc)
-                acc += cd
-
-            # Compute hook-to-clip assignments
+            # Pure timeline segmentation: divide total duration equally among hooks
+            # Each hook covers exactly effective_duration / num_hooks seconds
+            # No gaps, no overlaps, full coverage of the entire video
+            segment_duration = effective_duration / num_hooks
             hook_timings = []
-            if num_hooks >= num_clips:
-                for i in range(num_clips):
-                    s = clip_starts[i]
-                    e = min(s + max(clip_durations[i], MIN_HOOK_DURATION), effective_duration)
-                    hook_timings.append((s, e, hooks_to_show[i]))
-            else:
-                for i in range(num_hooks):
-                    clip_idx = round(i * (num_clips - 1) / max(num_hooks - 1, 1))
-                    s = clip_starts[clip_idx]
-                    e = min(s + max(clip_durations[clip_idx], MIN_HOOK_DURATION), effective_duration)
-                    hook_timings.append((s, e, hooks_to_show[i]))
+            for i in range(num_hooks):
+                start_t = i * segment_duration
+                end_t = (i + 1) * segment_duration
+                hook_timings.append((start_t, end_t, hooks_to_show[i]))
+
+            logger.info(f"[HOOKS] {num_hooks} hooks across {effective_duration:.1f}s -> {segment_duration:.1f}s each")
 
             anim = data.textAnimation or "fade"
             for start_t, end_t, hook in hook_timings:
