@@ -221,6 +221,7 @@ export default function Settings() {
                   { key: 'together', label: 'Together AI' },
                   { key: 'gemini', label: 'Gemini' },
                   { key: 'falai', label: 'FAL.AI' },
+                  { key: 'pexels', label: 'Pexels' },
                 ].map(({ key, label }) => (
                   <div key={key} className="flex items-center gap-2 text-sm">
                     {keyTestResult[key] ? (

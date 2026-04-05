@@ -41,6 +41,7 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 
 ### Pexels API Caching (Done - Apr 5, 2026)
 - [x] MongoDB pexels_cache with 24h TTL, unique cache_key index
+- [x] Fixed timezone-naive/aware datetime comparison crash (Apr 5)
 
 ### Assembly Pipeline Stability (Done - Apr 5, 2026)
 - [x] Moved assembly_jobs from in-memory dict to MongoDB (survives restarts)
@@ -52,7 +53,9 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 ### Auth Media Fix for Export (Done - Apr 5, 2026)
 - [x] fetchAuthMedia auto-refreshes expired tokens on 401 via tryRefreshToken()
 - [x] Step7 handleDownload + handleDownloadZip also refresh on 401
-- [x] Fixes video preview, platform downloads, and ZIP downloads in Export step
+
+### Settings / Test Keys (Done - Apr 5, 2026)
+- [x] Pexels now shown in Test Keys validation results
 
 ### Assembly (Done)
 - [x] Async background job, 401-resilient polling, FFmpeg auto-install
@@ -72,6 +75,8 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - [x] trim-video 401 from no retry in prepare phase (P0 - Fixed Apr 5)
 - [x] Export 401 from expired token in fetchAuthMedia (P0 - Fixed Apr 5)
 - [x] Download 401 from expired token in handleDownload/Zip (P0 - Fixed Apr 5)
+- [x] Pexels search 500 TypeError: naive vs aware datetime comparison (P0 - Fixed Apr 5)
+- [x] Pexels missing from Test Keys UI display (P1 - Fixed Apr 5)
 
 ## Test Credentials
 - Email: test@example.com | Password: test123456

@@ -555,9 +555,15 @@ async def search_stock_photos(request: Request, query: str, page: int = 1, per_p
 
     cache_key = f"photos:{query.lower().strip()}:{page}:{per_page}"
     cached = await db.pexels_cache.find_one({"cache_key": cache_key}, {"_id": 0})
-    if cached and cached.get("expires_at", datetime.min.replace(tzinfo=timezone.utc)) > datetime.now(timezone.utc):
-        logger.info(f"[PEXELS CACHE HIT] photos query='{query}' page={page}")
-        return cached["result"]
+    if cached and cached.get("expires_at"):
+        expires = cached["expires_at"]
+        now = datetime.now(timezone.utc)
+        # Handle both naive and aware datetimes from MongoDB
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires > now:
+            logger.info(f"[PEXELS CACHE HIT] photos query='{query}' page={page}")
+            return cached["result"]
 
     async with httpx.AsyncClient() as client_http:
         resp = await client_http.get(
@@ -607,9 +613,14 @@ async def search_stock_videos(request: Request, query: str, page: int = 1, per_p
 
     cache_key = f"videos:{query.lower().strip()}:{page}:{per_page}"
     cached = await db.pexels_cache.find_one({"cache_key": cache_key}, {"_id": 0})
-    if cached and cached.get("expires_at", datetime.min.replace(tzinfo=timezone.utc)) > datetime.now(timezone.utc):
-        logger.info(f"[PEXELS CACHE HIT] videos query='{query}' page={page}")
-        return cached["result"]
+    if cached and cached.get("expires_at"):
+        expires = cached["expires_at"]
+        now = datetime.now(timezone.utc)
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires > now:
+            logger.info(f"[PEXELS CACHE HIT] videos query='{query}' page={page}")
+            return cached["result"]
 
     async with httpx.AsyncClient() as client_http:
         resp = await client_http.get(
