@@ -195,6 +195,7 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
         textColor: project.assemblySettings.textColor || 'white',
         textPosition: project.assemblySettings.textPosition || 'middle',
         textStyle: project.assemblySettings.textStyle || 'shadow',
+        textAnimation: project.assemblySettings.textAnimation || 'fade',
       };
 
       if (isLibrary && libraryClipPaths) {
@@ -518,6 +519,35 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
                     }`}
                     style={(project.assemblySettings.textStyle || 'shadow') === opt.value ? { background: accentColor, borderColor: accentColor } : {}}
                     data-testid={`text-style-${opt.value}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Animation */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-[#f8f8f8]">Animation</span>
+              <div className="flex gap-1 flex-wrap justify-end">
+                {[
+                  { value: 'none', label: 'None' },
+                  { value: 'fade', label: 'Fade' },
+                  { value: 'slide_up', label: 'Slide Up' },
+                  { value: 'slide_down', label: 'Slide Down' },
+                  { value: 'pop', label: 'Pop' },
+                  { value: 'bounce', label: 'Bounce' },
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => updateSettings('textAnimation', opt.value)}
+                    className={`px-2 h-7 rounded text-[11px] font-medium transition-all ${
+                      (project.assemblySettings.textAnimation || 'fade') === opt.value
+                        ? 'text-white border-2'
+                        : 'bg-[#2a2a35] text-[#8b8b99] border border-[#2a2a35]'
+                    }`}
+                    style={(project.assemblySettings.textAnimation || 'fade') === opt.value ? { background: accentColor, borderColor: accentColor } : {}}
+                    data-testid={`text-anim-${opt.value}`}
                   >
                     {opt.label}
                   </button>

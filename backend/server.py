@@ -2716,6 +2716,7 @@ class AssembleVideoRequest(BaseModel):
     textColor: Optional[str] = "white"
     textPosition: Optional[str] = "middle"  # top, middle, bottom
     textStyle: Optional[str] = "shadow"  # shadow, outline, glow, none
+    textAnimation: Optional[str] = "fade"  # none, fade, slide_up, slide_down, pop, bounce
 
 async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, project: dict):
     """Background task: runs FFmpeg assembly and updates job status."""
@@ -2854,55 +2855,126 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         # none = no extra style
 
         if data.addTextOverlay and hooks_to_show and effective_duration > 0:
-            # Distribute hooks across specific clips, ensuring even spacing and readability
             num_clips = len(clip_durations)
             num_hooks = len(hooks_to_show)
-            MIN_HOOK_DURATION = 2.5  # Minimum seconds a hook stays visible
+            MIN_HOOK_DURATION = 2.5
+            ANIM_DUR = 0.6
 
-            # Build a time-map of clip boundaries
             clip_starts = []
             acc = 0
             for cd in clip_durations:
                 clip_starts.append(acc)
                 acc += cd
 
+            # Compute hook-to-clip assignments
+            hook_timings = []
             if num_hooks >= num_clips:
-                # More hooks than clips: 1 per clip, drop extras
                 for i in range(num_clips):
-                    hook = hooks_to_show[i]
-                    safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
-                    start_t = clip_starts[i]
-                    end_t = start_t + max(clip_durations[i], MIN_HOOK_DURATION)
-                    end_t = min(end_t, effective_duration)
-                    filter_parts.append(
-                        f"drawtext=text='{safe_hook}'"
-                        f":fontsize={txt_fontsize}:fontcolor={txt_color}"
-                        f":x=(w-text_w)/2:y={txt_y}"
-                        f"{font_str}{style_str}"
-                        f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
-                    )
+                    s = clip_starts[i]
+                    e = min(s + max(clip_durations[i], MIN_HOOK_DURATION), effective_duration)
+                    hook_timings.append((s, e, hooks_to_show[i]))
             else:
-                # Fewer hooks than clips: map each hook to an evenly-spaced clip index
-                # E.g. 3 hooks, 7 clips → clip indices 0, 3, 5
-                assigned_clips = []
                 for i in range(num_hooks):
                     clip_idx = round(i * (num_clips - 1) / max(num_hooks - 1, 1))
-                    assigned_clips.append(clip_idx)
+                    s = clip_starts[clip_idx]
+                    e = min(s + max(clip_durations[clip_idx], MIN_HOOK_DURATION), effective_duration)
+                    hook_timings.append((s, e, hooks_to_show[i]))
 
-                for i, clip_idx in enumerate(assigned_clips):
-                    hook = hooks_to_show[i]
-                    safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
-                    start_t = clip_starts[clip_idx]
-                    # Show hook for this clip's duration, but at least MIN_HOOK_DURATION
-                    hook_dur = max(clip_durations[clip_idx], MIN_HOOK_DURATION)
-                    end_t = min(start_t + hook_dur, effective_duration)
-                    filter_parts.append(
-                        f"drawtext=text='{safe_hook}'"
-                        f":fontsize={txt_fontsize}:fontcolor={txt_color}"
-                        f":x=(w-text_w)/2:y={txt_y}"
-                        f"{font_str}{style_str}"
-                        f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
+            anim = data.textAnimation or "fade"
+            for start_t, end_t, hook in hook_timings:
+                safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
+                base_y = txt_y
+
+                if anim == "none":
+                    y_expr = base_y
+                    alpha_expr = "1"
+                elif anim == "fade":
+                    alpha_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                        f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
+                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                        f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
+                        f"\\,1))"
                     )
+                    y_expr = base_y
+                elif anim == "slide_up":
+                    spx = 60
+                    alpha_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                        f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
+                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                        f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
+                        f"\\,1))"
+                    )
+                    y_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                        f"\\,{base_y}+{spx}*(1-(t-{start_t:.2f})/{ANIM_DUR})"
+                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                        f"\\,{base_y}-{spx}*(1-({end_t:.2f}-t)/{ANIM_DUR})"
+                        f"\\,{base_y}))"
+                    )
+                elif anim == "slide_down":
+                    spx = 60
+                    alpha_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                        f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
+                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                        f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
+                        f"\\,1))"
+                    )
+                    y_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                        f"\\,{base_y}-{spx}*(1-(t-{start_t:.2f})/{ANIM_DUR})"
+                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                        f"\\,{base_y}+{spx}*(1-({end_t:.2f}-t)/{ANIM_DUR})"
+                        f"\\,{base_y}))"
+                    )
+                elif anim == "pop":
+                    pd = 0.3
+                    alpha_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{pd})"
+                        f"\\,(t-{start_t:.2f})/{pd}"
+                        f"\\,if(gt(t\\,{end_t:.2f}-{pd})"
+                        f"\\,({end_t:.2f}-t)/{pd}"
+                        f"\\,1))"
+                    )
+                    y_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{pd})"
+                        f"\\,{base_y}-15*(1-(t-{start_t:.2f})/{pd})"
+                        f"\\,{base_y})"
+                    )
+                elif anim == "bounce":
+                    bd = 0.5
+                    alpha_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{bd})"
+                        f"\\,(t-{start_t:.2f})/{bd}"
+                        f"\\,if(gt(t\\,{end_t:.2f}-0.4)"
+                        f"\\,({end_t:.2f}-t)/0.4"
+                        f"\\,1))"
+                    )
+                    y_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{bd})"
+                        f"\\,{base_y}-80*(1-(t-{start_t:.2f})/{bd})*(1-(t-{start_t:.2f})/{bd})"
+                        f"\\,{base_y})"
+                    )
+                else:
+                    alpha_expr = (
+                        f"if(lt(t-{start_t:.2f}\\,{ANIM_DUR})"
+                        f"\\,(t-{start_t:.2f})/{ANIM_DUR}"
+                        f"\\,if(gt(t\\,{end_t:.2f}-{ANIM_DUR})"
+                        f"\\,({end_t:.2f}-t)/{ANIM_DUR}"
+                        f"\\,1))"
+                    )
+                    y_expr = base_y
+
+                filter_parts.append(
+                    f"drawtext=text='{safe_hook}'"
+                    f":fontsize={txt_fontsize}:fontcolor={txt_color}"
+                    f":x=(w-text_w)/2:y='{y_expr}'"
+                    f":alpha='{alpha_expr}'"
+                    f"{font_str}{style_str}"
+                    f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
+                )
 
         # Subtitle overlays — cap at MAX_SUBTITLE_LINES to prevent filter overload
         subtitles_capped = False
