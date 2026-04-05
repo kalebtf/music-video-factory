@@ -3,72 +3,55 @@
 ## Original Problem Statement
 Build a full-stack web app called "Music Video Factory" for creating short music videos for TikTok/Shorts.
 - Tech: React + FastAPI (Python) + MongoDB
-- Design: Dark theme (#0c0c0f bg, #141418 cards, #e94560 AI accent, #00b4d8 Library accent)
-- Two modes: AI Mode (generates AI prompts/images) and Library/MyMedia Mode (uploaded + Pexels stock media)
+- Two modes: AI Mode (AI prompts/images/animation) and Library/MyMedia Mode (uploaded + Pexels + FFmpeg effects)
 
 ## What's Been Implemented
 
 ### Foundation (Done)
-- [x] JWT Auth, Dashboard, Settings (6 API keys incl Pexels), Centralized axios
-
-### Split-Path Wizard (Done)
-- [x] Mode Selection Screen (AI Mode / Library Mode)
-- [x] Dynamic wizard steps (AI: 7 steps, Library: 6 steps)
+- [x] JWT Auth, Dashboard, Settings (6 API keys incl Pexels)
 
 ### AI Mode (Done, Untouched)
-- [x] Song Input, Climax, Visual Concept, Generate Images, Animate Clips (FAL.AI), Assemble (async), Export
+- [x] Song Input, Climax, Visual Concept, Generate Images, Animate Clips (FAL.AI), Assemble, Export
 
 ### Library/MyMedia Mode (Done)
-- [x] Song Input, Climax, Media Library (Pexels + uploads + AI prompts), Hooks, Assemble, Export
-- [x] FFmpeg visual effects system (NO AI animation calls)
-- [x] 20 effects in 5 categories: Motion (7), Slide (4), Fade (4), Style (4), Basic (1)
-- [x] 3 transitions: Crossfade, Hard Cut, Fade to Black
-- [x] 6 presets: Cinematic, Dynamic, Smooth, Energetic, Vintage Film, Dreamy
-- [x] Per-item effect selector with categorized optgroups
-- [x] Per-item transition selector (Crossfade/Cut/Fade Black)
-- [x] Duration slider per image
+- [x] Song Input, Climax, Media Library, Hooks, Assemble, Export
+- [x] 20 FFmpeg effects (Motion/Slide/Fade/Style/Basic), 3 transitions, 6 presets
+- [x] Per-item effect + transition selectors
+- [x] **Zero AI credits** — Pexels (free) + FFmpeg (local)
 
 ### Climax Selector (Done)
-- [x] Custom React-rendered draggable trim bars (mp3cut.net style)
-- [x] Left bar = start, Right bar = end, independently draggable
-- [x] Middle region draggable — moves entire selection without resizing
-- [x] Click inside region = seek + play from that position
+- [x] Left/Right trim bars + middle region drag (preserves duration)
+- [x] Click inside region = seek + play
+- [x] **Region drag stops playback**, seeks to new start on release
 
 ### Hooks System (Done)
-- [x] Clip-aligned distribution: hooks mapped to specific clip indices
-- [x] Formula: round(i * (numClips-1) / max(numHooks-1, 1))
-- [x] MIN_HOOK_DURATION = 2.5s — each hook stays readable
-- [x] No repeats; extras dropped if more hooks than clips
+- [x] **Pure timeline segmentation**: D/N per hook, sequential, full coverage, no gaps
+- [x] **Multiline word wrapping**: MAX_CHARS_PER_LINE=28, auto font reduction for 4+ lines
+- [x] Each line = separate drawtext with centered y-offset
 
-### Text Styling Controls (Done)
-- [x] Font Family: Sans, Serif, Mono, Narrow (Liberation fonts)
-- [x] Size: Small (40px) / Medium (56px) / Large (72px)
-- [x] Color: White, Yellow, Red, Cyan, Lime
-- [x] Position: Top / Middle / Bottom
-- [x] Style: Shadow, Outline, Glow, None
-- [x] **Animation: None, Fade, Slide Up, Slide Down, Pop, Bounce**
-  - Fade: smooth alpha in/out over 0.6s
-  - Slide Up: rises from +60px below with fade
-  - Slide Down: drops from -60px above with fade
-  - Pop: quick 0.3s appear with slight upward bounce
-  - Bounce: drops from 80px above with quadratic deceleration
-- [x] All applied via FFmpeg drawtext alpha + y expressions
+### Text Styling (Done)
+- [x] Font: Sans/Serif/Mono/Narrow | Size: S/M/L | Color: 5 options | Position: Top/Mid/Bot
+- [x] Style: Shadow/Outline/Glow/None
+- [x] **Animation: None/Fade/Slide Up/Slide Down/Pop/Bounce** (FFmpeg alpha+y expressions)
+- [x] **Live 9:16 preview panel** — shows text with current settings in real-time
 
 ### Assembly System (Done)
-- [x] Async background job with polling (401-resilient)
-- [x] FFmpeg auto-install on backend startup
-- [x] Crossfade duration slider, subtitle overlays
+- [x] Async background job, 401-resilient polling, FFmpeg auto-install
 
-### Phase 2: Metadata Generation (Done)
-- [x] GPT-4o-mini metadata for TikTok, YouTube Shorts, Instagram Reels, Facebook Reels
+### Metadata Generation (Done)
+- [x] GPT-4o-mini metadata for TikTok, YouTube, Instagram, Facebook
+
+## Credits / Cost Model
+- **Library/MyMedia mode**: Zero AI credits (Pexels free, FFmpeg local)
+- **AI Mode**: Together AI (images), FAL.AI (animation), OpenAI (prompts/metadata/thumbnails)
 
 ## Test Credentials
 - Email: test@example.com | Password: test123456
 
 ## Next Tasks / Backlog
-- [ ] Exact subtitle sync via Whisper (word-level timestamps) (P2)
-- [ ] Manual video trim in/out selection for stock clips (P2)
+- [ ] Whisper subtitle sync (P2)
+- [ ] Manual video trim in/out for stock clips (P2)
 - [ ] Auto-suggest effects by song mood (P2)
-- [ ] Direct publishing to TikTok, YouTube, Instagram (P3)
+- [ ] Direct publishing to socials (P3)
 - [ ] Kling API integration (P3)
-- [ ] Refactor server.py into route modules (Deferred)
+- [ ] Refactor server.py (Deferred)
