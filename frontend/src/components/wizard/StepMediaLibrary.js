@@ -103,6 +103,7 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
         mediaUrl: data.mediaUrl,
         duration: data.duration || 0,
         effect: 'ken_burns_in',
+        transition: 'crossfade',
         stillDuration: 4,
         clipUrl: '',
         clipPath: '',
@@ -154,6 +155,7 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
           mediaUrl: data.mediaUrl,
           duration: data.duration || 0,
           effect: 'ken_burns_in',
+          transition: 'crossfade',
           stillDuration: 4,
           clipUrl: '',
           clipPath: '',
@@ -184,6 +186,12 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
   const updateEffect = (id, effect) => {
     updateMedia(media.map(m =>
       m.id === id ? { ...m, effect } : m
+    ));
+  };
+
+  const updateTransition = (id, transition) => {
+    updateMedia(media.map(m =>
+      m.id === id ? { ...m, transition } : m
     ));
   };
 
@@ -691,6 +699,20 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
                           <span className="text-[11px] text-[#8b8b99] w-6">{item.stillDuration || 4}s</span>
                         </div>
                       </>
+                    )}
+                    {/* Transition selector — shown for all items (transition to next clip) */}
+                    {index < media.filter(m => m.status !== 'rejected').length - 1 && (
+                      <select
+                        value={item.transition || 'crossfade'}
+                        onChange={(e) => { e.stopPropagation(); updateTransition(item.id, e.target.value); }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="px-2 py-0.5 rounded text-[11px] font-medium bg-[#1e1e24] text-[#8b8b99] border border-[#2a2a35] focus:border-[#e94560] focus:outline-none cursor-pointer"
+                        data-testid={`transition-select-${item.id}`}
+                      >
+                        <option value="crossfade">Crossfade</option>
+                        <option value="cut">Hard Cut</option>
+                        <option value="fade_black">Fade Black</option>
+                      </select>
                     )}
                     {!isImage(item.type) && item.duration > 0 && (
                       <span className="text-[11px] text-[#8b8b99] flex items-center gap-1">

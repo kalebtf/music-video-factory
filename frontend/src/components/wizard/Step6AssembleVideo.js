@@ -190,6 +190,7 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
         hookTexts: project.concept.selectedHooks || [],
         addSubtitles: project.assemblySettings.addSubtitles || false,
         lyrics: climaxLyrics,
+        textFont: project.assemblySettings.textFont || 'sans',
         textSize: project.assemblySettings.textSize || 'medium',
         textColor: project.assemblySettings.textColor || 'white',
         textPosition: project.assemblySettings.textPosition || 'middle',
@@ -390,6 +391,36 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
         {project.assemblySettings.addTextOverlay && (
           <div className="bg-[#0c0c0f] border border-[#2a2a35] rounded-lg p-4 space-y-4" data-testid="text-style-controls">
             <p className="text-xs text-[#8b8b99] uppercase tracking-wider font-medium mb-2">Text Style</p>
+
+            {/* Font Family */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-[#f8f8f8]">Font</span>
+              <div className="flex gap-1">
+                {[
+                  { value: 'sans', label: 'Sans' },
+                  { value: 'serif', label: 'Serif' },
+                  { value: 'mono', label: 'Mono' },
+                  { value: 'condensed', label: 'Narrow' },
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => updateSettings('textFont', opt.value)}
+                    className={`px-2.5 h-8 rounded text-xs font-medium transition-all ${
+                      (project.assemblySettings.textFont || 'sans') === opt.value
+                        ? 'text-white border-2'
+                        : 'bg-[#2a2a35] text-[#8b8b99] border border-[#2a2a35]'
+                    }`}
+                    style={{
+                      ...(project.assemblySettings.textFont || 'sans') === opt.value ? { background: accentColor, borderColor: accentColor } : {},
+                      fontFamily: opt.value === 'serif' ? 'Georgia, serif' : opt.value === 'mono' ? 'monospace' : opt.value === 'condensed' ? 'Arial Narrow, sans-serif' : 'sans-serif',
+                    }}
+                    data-testid={`text-font-${opt.value}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             {/* Size */}
             <div className="flex items-center justify-between">

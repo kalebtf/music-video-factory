@@ -2711,7 +2711,7 @@ class AssembleVideoRequest(BaseModel):
     lyrics: Optional[str] = None
     libraryClipPaths: Optional[List[str]] = None  # For library mode
     # Text styling options
-    textFont: Optional[str] = None
+    textFont: Optional[str] = "sans"  # sans, serif, mono, condensed, handwritten
     textSize: Optional[str] = "medium"  # small, medium, large
     textColor: Optional[str] = "white"
     textPosition: Optional[str] = "middle"  # top, middle, bottom
@@ -2834,6 +2834,15 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         txt_color = data.textColor or "white"
         pos_y_map = {"top": "h*0.08", "middle": "h*0.35", "bottom": "h*0.82"}
         txt_y = pos_y_map.get(data.textPosition, "h*0.35")
+        # Font family (use system fonts available in the container)
+        font_map = {
+            "sans": "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "serif": "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+            "mono": "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
+            "condensed": "/usr/share/fonts/truetype/liberation/LiberationSansNarrow-Bold.ttf",
+        }
+        font_file = font_map.get(data.textFont, font_map["sans"])
+        font_str = f":fontfile={font_file}" if Path(font_file).exists() else ""
         # Style params
         style_str = ""
         if data.textStyle == "shadow" or data.textStyle is None:
@@ -2845,10 +2854,10 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         # none = no extra style
 
         if data.addTextOverlay and hooks_to_show and effective_duration > 0:
-            # Distribute hooks evenly across the full video timeline
-            # If fewer hooks than clips, space them out; if more, cap at clip count
+            # Distribute hooks across specific clips, ensuring even spacing and readability
             num_clips = len(clip_durations)
             num_hooks = len(hooks_to_show)
+            MIN_HOOK_DURATION = 2.5  # Minimum seconds a hook stays visible
 
             # Build a time-map of clip boundaries
             clip_starts = []
@@ -2858,32 +2867,40 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
                 acc += cd
 
             if num_hooks >= num_clips:
-                # More hooks than clips: assign 1 per clip, drop extras
+                # More hooks than clips: 1 per clip, drop extras
                 for i in range(num_clips):
-                    hook = hooks_to_show[i % num_hooks]
+                    hook = hooks_to_show[i]
                     safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
                     start_t = clip_starts[i]
-                    end_t = start_t + clip_durations[i]
+                    end_t = start_t + max(clip_durations[i], MIN_HOOK_DURATION)
+                    end_t = min(end_t, effective_duration)
                     filter_parts.append(
                         f"drawtext=text='{safe_hook}'"
                         f":fontsize={txt_fontsize}:fontcolor={txt_color}"
                         f":x=(w-text_w)/2:y={txt_y}"
-                        f"{style_str}"
+                        f"{font_str}{style_str}"
                         f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
                     )
             else:
-                # Fewer hooks than clips: spread evenly across timeline
-                hook_segment = effective_duration / num_hooks
+                # Fewer hooks than clips: map each hook to an evenly-spaced clip index
+                # E.g. 3 hooks, 7 clips → clip indices 0, 3, 5
+                assigned_clips = []
                 for i in range(num_hooks):
+                    clip_idx = round(i * (num_clips - 1) / max(num_hooks - 1, 1))
+                    assigned_clips.append(clip_idx)
+
+                for i, clip_idx in enumerate(assigned_clips):
                     hook = hooks_to_show[i]
                     safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
-                    start_t = i * hook_segment
-                    end_t = start_t + hook_segment
+                    start_t = clip_starts[clip_idx]
+                    # Show hook for this clip's duration, but at least MIN_HOOK_DURATION
+                    hook_dur = max(clip_durations[clip_idx], MIN_HOOK_DURATION)
+                    end_t = min(start_t + hook_dur, effective_duration)
                     filter_parts.append(
                         f"drawtext=text='{safe_hook}'"
                         f":fontsize={txt_fontsize}:fontcolor={txt_color}"
                         f":x=(w-text_w)/2:y={txt_y}"
-                        f"{style_str}"
+                        f"{font_str}{style_str}"
                         f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
                     )
 
