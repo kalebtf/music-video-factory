@@ -35,23 +35,24 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - [x] 5 cinematic styles: Cinematic Warm, Dreamy, Vintage, Moody, Raw
 - [x] FFmpeg filters: eq, colorbalance, vignette, noise, gblur per style
 - [x] Applied AFTER fades but BEFORE text (text stays crisp)
-- [x] Library mode only -- AI Mode untouched
 
 ### Hook Readability (Done - Apr 5, 2026)
 - [x] Semi-transparent drawbox background pill (black@0.5) behind hook text
-- [x] 900px width, 16px vertical padding, centered, synced to hook timing
 
 ### Pexels API Caching (Done - Apr 5, 2026)
 - [x] MongoDB pexels_cache with 24h TTL, unique cache_key index
 
 ### Assembly Pipeline Stability (Done - Apr 5, 2026)
-- [x] Moved assembly_jobs from in-memory dict to MongoDB collection
-- [x] Jobs survive server restarts/hot-reloads (no more 404 on polling)
-- [x] Jobs NOT deleted on first status read (persist until 1hr TTL auto-cleanup)
-- [x] Frontend: adaptive polling (2s -> 4s -> 6s intervals)
-- [x] Frontend: tolerates 404 (5 retries), 502/503 (continues), 401 (15 retries)
-- [x] Frontend: retryApiCall wrapper for still-to-clip/trim-video (3 retries with backoff)
-- [x] FFmpeg preset 'veryfast' (2-3x faster encoding, negligible quality loss at CRF 23)
+- [x] Moved assembly_jobs from in-memory dict to MongoDB (survives restarts)
+- [x] Jobs NOT deleted on first read (1hr TTL auto-cleanup)
+- [x] Frontend: adaptive polling (2s -> 4s -> 6s), 404/502 tolerance
+- [x] Frontend: retryApiCall for still-to-clip/trim-video (3 retries)
+- [x] FFmpeg preset 'veryfast' (2-3x faster encoding)
+
+### Auth Media Fix for Export (Done - Apr 5, 2026)
+- [x] fetchAuthMedia auto-refreshes expired tokens on 401 via tryRefreshToken()
+- [x] Step7 handleDownload + handleDownloadZip also refresh on 401
+- [x] Fixes video preview, platform downloads, and ZIP downloads in Export step
 
 ### Assembly (Done)
 - [x] Async background job, 401-resilient polling, FFmpeg auto-install
@@ -63,12 +64,14 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - [x] base_y not defined (P0)
 - [x] FFmpeg not installed -- auto-install on startup
 - [x] AnimateImageRequest 422 -- prompt field made Optional
-- [x] Hooks response parsing -- data.hooks not data.concept.hooks
+- [x] Hooks response parsing
 - [x] Polling 401 -- silent retry with counter
 - [x] Animation status case mismatch
-- [x] Assembly 404s from in-memory job store lost on server restart (P0 - Fixed Apr 5)
-- [x] Assembly 404s from immediate job deletion on first status read (P0 - Fixed Apr 5)
-- [x] trim-video 401 from no retry logic during prepare phase (P0 - Fixed Apr 5)
+- [x] Assembly 404s from in-memory job store (P0 - Fixed Apr 5)
+- [x] Assembly 404s from job deletion on first read (P0 - Fixed Apr 5)
+- [x] trim-video 401 from no retry in prepare phase (P0 - Fixed Apr 5)
+- [x] Export 401 from expired token in fetchAuthMedia (P0 - Fixed Apr 5)
+- [x] Download 401 from expired token in handleDownload/Zip (P0 - Fixed Apr 5)
 
 ## Test Credentials
 - Email: test@example.com | Password: test123456
