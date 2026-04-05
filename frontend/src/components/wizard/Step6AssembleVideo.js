@@ -35,9 +35,11 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
   }, []);
 
   const pollJobStatus = (jid) => {
+    let authRetries = 0;
     pollRef.current = setInterval(async () => {
       try {
         const { data } = await api.get(`/video/assemble/${jid}/status`);
+        authRetries = 0; // reset on success
         setStatusMessage(data.message || 'Processing...');
 
         if (data.status === 'completed') {
@@ -66,7 +68,23 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
           setError(data.error || 'Video assembly failed. Please try again.');
         }
       } catch (err) {
-        console.error('Polling error:', err);
+        // On 401, the axios interceptor will attempt token refresh.
+        // If refresh succeeds, the retried request resolves normally above.
+        // If refresh fails (no valid refresh token), we silently wait and retry
+        // since the backend job continues independently.
+        const status = err.response?.status;
+        if (status === 401) {
+          authRetries++;
+          if (authRetries > 10) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+            setAssembling(false);
+            setError('Session expired. Please refresh the page and check your video on the dashboard.');
+          }
+          // Otherwise silently skip this poll cycle — interceptor handles refresh
+        } else {
+          console.error('Polling error:', err);
+        }
       }
     }, POLL_INTERVAL);
   };
@@ -172,6 +190,10 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
         hookTexts: project.concept.selectedHooks || [],
         addSubtitles: project.assemblySettings.addSubtitles || false,
         lyrics: climaxLyrics,
+        textSize: project.assemblySettings.textSize || 'medium',
+        textColor: project.assemblySettings.textColor || 'white',
+        textPosition: project.assemblySettings.textPosition || 'middle',
+        textStyle: project.assemblySettings.textStyle || 'shadow',
       };
 
       if (isLibrary && libraryClipPaths) {
@@ -363,6 +385,116 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
             }`} />
           </button>
         </div>
+
+        {/* Text Styling Controls — shown when text overlay is ON */}
+        {project.assemblySettings.addTextOverlay && (
+          <div className="bg-[#0c0c0f] border border-[#2a2a35] rounded-lg p-4 space-y-4" data-testid="text-style-controls">
+            <p className="text-xs text-[#8b8b99] uppercase tracking-wider font-medium mb-2">Text Style</p>
+
+            {/* Size */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-[#f8f8f8]">Size</span>
+              <div className="flex gap-1">
+                {[
+                  { value: 'small', label: 'S' },
+                  { value: 'medium', label: 'M' },
+                  { value: 'large', label: 'L' },
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => updateSettings('textSize', opt.value)}
+                    className={`w-9 h-8 rounded text-xs font-bold transition-all ${
+                      (project.assemblySettings.textSize || 'medium') === opt.value
+                        ? 'text-white border-2'
+                        : 'bg-[#2a2a35] text-[#8b8b99] border border-[#2a2a35]'
+                    }`}
+                    style={(project.assemblySettings.textSize || 'medium') === opt.value ? { background: accentColor, borderColor: accentColor } : {}}
+                    data-testid={`text-size-${opt.value}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Color */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-[#f8f8f8]">Color</span>
+              <div className="flex gap-1.5">
+                {[
+                  { value: 'white', bg: '#ffffff' },
+                  { value: 'yellow', bg: '#facc15' },
+                  { value: 'red', bg: '#ef4444' },
+                  { value: 'cyan', bg: '#06b6d4' },
+                  { value: 'lime', bg: '#84cc16' },
+                ].map(c => (
+                  <button
+                    key={c.value}
+                    onClick={() => updateSettings('textColor', c.value)}
+                    className={`w-7 h-7 rounded-full border-2 transition-all ${
+                      (project.assemblySettings.textColor || 'white') === c.value ? 'border-white scale-110' : 'border-[#2a2a35]'
+                    }`}
+                    style={{ background: c.bg }}
+                    data-testid={`text-color-${c.value}`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Position */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-[#f8f8f8]">Position</span>
+              <div className="flex gap-1">
+                {[
+                  { value: 'top', label: 'Top' },
+                  { value: 'middle', label: 'Mid' },
+                  { value: 'bottom', label: 'Bot' },
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => updateSettings('textPosition', opt.value)}
+                    className={`px-3 h-8 rounded text-xs font-medium transition-all ${
+                      (project.assemblySettings.textPosition || 'middle') === opt.value
+                        ? 'text-white border-2'
+                        : 'bg-[#2a2a35] text-[#8b8b99] border border-[#2a2a35]'
+                    }`}
+                    style={(project.assemblySettings.textPosition || 'middle') === opt.value ? { background: accentColor, borderColor: accentColor } : {}}
+                    data-testid={`text-pos-${opt.value}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Style */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-[#f8f8f8]">Style</span>
+              <div className="flex gap-1">
+                {[
+                  { value: 'shadow', label: 'Shadow' },
+                  { value: 'outline', label: 'Outline' },
+                  { value: 'glow', label: 'Glow' },
+                  { value: 'none', label: 'None' },
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => updateSettings('textStyle', opt.value)}
+                    className={`px-2.5 h-8 rounded text-xs font-medium transition-all ${
+                      (project.assemblySettings.textStyle || 'shadow') === opt.value
+                        ? 'text-white border-2'
+                        : 'bg-[#2a2a35] text-[#8b8b99] border border-[#2a2a35]'
+                    }`}
+                    style={(project.assemblySettings.textStyle || 'shadow') === opt.value ? { background: accentColor, borderColor: accentColor } : {}}
+                    data-testid={`text-style-${opt.value}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Crossfade */}
         <div>

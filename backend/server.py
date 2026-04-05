@@ -761,32 +761,54 @@ async def still_to_clip(project_id: str, request: Request, data: dict):
     output_path = clips_dir / f"still_{clip_id}.mp4"
     frames = int(duration * 30)
 
-    # Build the effect filter chain
+    # Build the effect filter chain — expanded set
     base_scale = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+    needs_fps_flag = False  # effects without zoompan need explicit -r 30
+
     effect_filters = {
+        # Motion effects (zoompan-based, sets its own fps)
         "ken_burns_in": f"{base_scale},zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
         "ken_burns_out": f"{base_scale},zoompan=z='if(lte(zoom,1.0),1.3,max(1.001,zoom-0.0015))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
         "pan_left": f"{base_scale},zoompan=z='1.15':x='iw*0.15*(1-on/{frames})':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
         "pan_right": f"{base_scale},zoompan=z='1.15':x='iw*0.15*(on/{frames})':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
         "pan_up": f"{base_scale},zoompan=z='1.15':x='iw/2-(iw/zoom/2)':y='ih*0.15*(1-on/{frames})':d={frames}:s=1080x1920:fps=30",
         "pan_down": f"{base_scale},zoompan=z='1.15':x='iw/2-(iw/zoom/2)':y='ih*0.15*(on/{frames})':d={frames}:s=1080x1920:fps=30",
-        "fade_in": f"{base_scale}",
-        "fade_out": f"{base_scale}",
-        "blur_in": f"{base_scale}",
-        "blur_out": f"{base_scale}",
-        "static": f"{base_scale}",
+        "zoom_rotate": f"{base_scale},zoompan=z='min(zoom+0.001,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
+        # Slide effects (zoompan-based)
+        "slide_left": f"{base_scale},zoompan=z='1.0':x='iw*0.3*(on/{frames})':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
+        "slide_right": f"{base_scale},zoompan=z='1.0':x='iw*0.3*(1-on/{frames})':y='ih/2-(ih/zoom/2)':d={frames}:s=1080x1920:fps=30",
+        "slide_up": f"{base_scale},zoompan=z='1.0':x='iw/2-(iw/zoom/2)':y='ih*0.3*(on/{frames})':d={frames}:s=1080x1920:fps=30",
+        "slide_down": f"{base_scale},zoompan=z='1.0':x='iw/2-(iw/zoom/2)':y='ih*0.3*(1-on/{frames})':d={frames}:s=1080x1920:fps=30",
     }
 
-    vf = effect_filters.get(effect, effect_filters["ken_burns_in"])
+    # Simple filter effects (need -r flag)
+    simple_effects = {
+        "fade_in": base_scale,
+        "fade_out": base_scale,
+        "blur_in": base_scale,
+        "blur_out": base_scale,
+        "vignette": f"{base_scale},vignette=PI/4",
+        "vintage": f"{base_scale},colorbalance=rs=0.3:gs=-0.05:bs=-0.1,curves=vintage",
+        "glow": f"{base_scale},unsharp=5:5:1.5:5:5:0.0",
+        "film_grain": f"{base_scale},noise=alls=25:allf=t",
+        "static": base_scale,
+    }
 
-    # For fade/blur effects, we apply the filter in the final encode step
+    if effect in simple_effects:
+        vf = simple_effects[effect]
+        needs_fps_flag = True
+    elif effect in effect_filters:
+        vf = effect_filters[effect]
+    else:
+        vf = effect_filters["ken_burns_in"]
+
+    # Post-processing fade/blur for simple effects
     fade_filter = ""
     if effect == "fade_in":
         fade_filter = f",fade=t=in:st=0:d={min(1.5, duration/2)}"
     elif effect == "fade_out":
         fade_filter = f",fade=t=out:st={max(0, duration - 1.5)}:d={min(1.5, duration/2)}"
     elif effect == "blur_in":
-        # Simulate blur-to-sharp: start blurred, sharpen over 1s
         fade_filter = f",fade=t=in:st=0:d=1"
     elif effect == "blur_out":
         fade_filter = f",fade=t=out:st={max(0, duration - 1)}:d=1"
@@ -797,18 +819,10 @@ async def still_to_clip(project_id: str, request: Request, data: dict):
         '-vf', vf + fade_filter,
         '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
         '-t', str(duration), '-pix_fmt', 'yuv420p',
-        str(output_path)
     ]
-    # zoompan already sets fps, but for non-zoompan effects we need -r
-    if effect in ("fade_in", "fade_out", "blur_in", "blur_out", "static"):
-        cmd = [
-            'ffmpeg', '-y',
-            '-loop', '1', '-i', str(image_path),
-            '-vf', vf + fade_filter,
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-            '-t', str(duration), '-pix_fmt', 'yuv420p', '-r', '30',
-            str(output_path)
-        ]
+    if needs_fps_flag:
+        cmd.extend(['-r', '30'])
+    cmd.append(str(output_path))
 
     logger.info(f"[EFFECT] Creating clip with effect='{effect}' for {image_path}")
     result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
@@ -847,10 +861,19 @@ async def list_effects():
             {"id": "pan_right", "name": "Pan Right", "category": "motion", "description": "Gentle pan from left to right"},
             {"id": "pan_up", "name": "Pan Up", "category": "motion", "description": "Gentle upward pan"},
             {"id": "pan_down", "name": "Pan Down", "category": "motion", "description": "Gentle downward pan"},
+            {"id": "slide_left", "name": "Slide Left", "category": "slide", "description": "Slide image from right to left"},
+            {"id": "slide_right", "name": "Slide Right", "category": "slide", "description": "Slide image from left to right"},
+            {"id": "slide_up", "name": "Slide Up", "category": "slide", "description": "Slide image upward"},
+            {"id": "slide_down", "name": "Slide Down", "category": "slide", "description": "Slide image downward"},
+            {"id": "zoom_rotate", "name": "Zoom + Rotate", "category": "motion", "description": "Subtle zoom with slight rotation feel"},
             {"id": "fade_in", "name": "Fade In", "category": "fade", "description": "Fade from black"},
             {"id": "fade_out", "name": "Fade Out", "category": "fade", "description": "Fade to black"},
             {"id": "blur_in", "name": "Blur In", "category": "fade", "description": "Blur to sharp reveal"},
             {"id": "blur_out", "name": "Blur Out", "category": "fade", "description": "Sharp to blur exit"},
+            {"id": "vignette", "name": "Vignette", "category": "style", "description": "Dark edges, focused center"},
+            {"id": "vintage", "name": "Vintage", "category": "style", "description": "Warm retro color grading"},
+            {"id": "glow", "name": "Glow", "category": "style", "description": "Soft luminous glow"},
+            {"id": "film_grain", "name": "Film Grain", "category": "style", "description": "Classic film grain texture"},
             {"id": "static", "name": "Static", "category": "basic", "description": "No motion, still frame"},
         ],
         "transitions": [
@@ -860,9 +883,11 @@ async def list_effects():
         ],
         "presets": [
             {"id": "cinematic", "name": "Cinematic", "effects": ["ken_burns_in", "pan_right", "ken_burns_out", "pan_left", "ken_burns_in"], "transition": "crossfade"},
-            {"id": "dynamic", "name": "Dynamic", "effects": ["pan_left", "ken_burns_in", "pan_right", "ken_burns_out", "pan_up"], "transition": "crossfade"},
+            {"id": "dynamic", "name": "Dynamic", "effects": ["pan_left", "ken_burns_in", "slide_right", "ken_burns_out", "pan_up"], "transition": "crossfade"},
             {"id": "smooth", "name": "Smooth & Slow", "effects": ["fade_in", "ken_burns_in", "ken_burns_out", "fade_out", "ken_burns_in"], "transition": "crossfade"},
-            {"id": "energetic", "name": "Energetic", "effects": ["pan_left", "pan_right", "pan_up", "pan_down", "ken_burns_in"], "transition": "cut"},
+            {"id": "energetic", "name": "Energetic", "effects": ["slide_left", "pan_right", "slide_up", "pan_down", "ken_burns_in"], "transition": "cut"},
+            {"id": "vintage_film", "name": "Vintage Film", "effects": ["vintage", "film_grain", "vignette", "ken_burns_in", "glow"], "transition": "crossfade"},
+            {"id": "dreamy", "name": "Dreamy", "effects": ["glow", "blur_in", "ken_burns_in", "fade_out", "blur_out"], "transition": "crossfade"},
         ]
     }
 
@@ -2685,6 +2710,12 @@ class AssembleVideoRequest(BaseModel):
     addSubtitles: bool = False
     lyrics: Optional[str] = None
     libraryClipPaths: Optional[List[str]] = None  # For library mode
+    # Text styling options
+    textFont: Optional[str] = None
+    textSize: Optional[str] = "medium"  # small, medium, large
+    textColor: Optional[str] = "white"
+    textPosition: Optional[str] = "middle"  # top, middle, bottom
+    textStyle: Optional[str] = "shadow"  # shadow, outline, glow, none
 
 async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, project: dict):
     """Background task: runs FFmpeg assembly and updates job status."""
@@ -2797,23 +2828,64 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         hooks_to_show = [h for h in hooks_to_show if h and h.strip()]
         effective_duration = audio_duration if audio_duration > 0 else total_clip_duration
 
+        # Resolve text styling
+        font_size_map = {"small": 40, "medium": 56, "large": 72}
+        txt_fontsize = font_size_map.get(data.textSize, 56)
+        txt_color = data.textColor or "white"
+        pos_y_map = {"top": "h*0.08", "middle": "h*0.35", "bottom": "h*0.82"}
+        txt_y = pos_y_map.get(data.textPosition, "h*0.35")
+        # Style params
+        style_str = ""
+        if data.textStyle == "shadow" or data.textStyle is None:
+            style_str = ":shadowcolor=black@0.8:shadowx=4:shadowy=4"
+        elif data.textStyle == "outline":
+            style_str = ":borderw=3:bordercolor=black@0.9"
+        elif data.textStyle == "glow":
+            style_str = ":shadowcolor=white@0.5:shadowx=0:shadowy=0:borderw=2:bordercolor=black@0.6"
+        # none = no extra style
+
         if data.addTextOverlay and hooks_to_show and effective_duration > 0:
-            # 1 hook per clip — each hook appears only once, mapped to its clip
-            accumulated_time = 0
-            for i in range(min(len(hooks_to_show), len(clip_durations))):
-                hook = hooks_to_show[i]
-                clip_dur = clip_durations[i] if i < len(clip_durations) else (effective_duration / len(hooks_to_show))
-                safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
-                start_t = accumulated_time
-                end_t = accumulated_time + clip_dur
-                filter_parts.append(
-                    f"drawtext=text='{safe_hook}'"
-                    f":fontsize=56:fontcolor=white"
-                    f":x=(w-text_w)/2:y=h*0.35"
-                    f":shadowcolor=black@0.8:shadowx=4:shadowy=4"
-                    f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
-                )
-                accumulated_time += clip_dur
+            # Distribute hooks evenly across the full video timeline
+            # If fewer hooks than clips, space them out; if more, cap at clip count
+            num_clips = len(clip_durations)
+            num_hooks = len(hooks_to_show)
+
+            # Build a time-map of clip boundaries
+            clip_starts = []
+            acc = 0
+            for cd in clip_durations:
+                clip_starts.append(acc)
+                acc += cd
+
+            if num_hooks >= num_clips:
+                # More hooks than clips: assign 1 per clip, drop extras
+                for i in range(num_clips):
+                    hook = hooks_to_show[i % num_hooks]
+                    safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
+                    start_t = clip_starts[i]
+                    end_t = start_t + clip_durations[i]
+                    filter_parts.append(
+                        f"drawtext=text='{safe_hook}'"
+                        f":fontsize={txt_fontsize}:fontcolor={txt_color}"
+                        f":x=(w-text_w)/2:y={txt_y}"
+                        f"{style_str}"
+                        f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
+                    )
+            else:
+                # Fewer hooks than clips: spread evenly across timeline
+                hook_segment = effective_duration / num_hooks
+                for i in range(num_hooks):
+                    hook = hooks_to_show[i]
+                    safe_hook = hook.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
+                    start_t = i * hook_segment
+                    end_t = start_t + hook_segment
+                    filter_parts.append(
+                        f"drawtext=text='{safe_hook}'"
+                        f":fontsize={txt_fontsize}:fontcolor={txt_color}"
+                        f":x=(w-text_w)/2:y={txt_y}"
+                        f"{style_str}"
+                        f":enable='between(t\\,{start_t:.2f}\\,{end_t:.2f})'"
+                    )
 
         # Subtitle overlays — cap at MAX_SUBTITLE_LINES to prevent filter overload
         subtitles_capped = False
@@ -3124,6 +3196,24 @@ app.add_middleware(
 # Startup event
 @app.on_event("startup")
 async def startup():
+    # Ensure FFmpeg is available (required for video assembly)
+    import shutil
+    if not shutil.which("ffmpeg"):
+        logger.warning("FFmpeg not found, attempting to install...")
+        try:
+            result = subprocess.run(
+                ["apt-get", "install", "-y", "-qq", "ffmpeg"],
+                capture_output=True, text=True, timeout=120
+            )
+            if result.returncode == 0:
+                logger.info("FFmpeg installed successfully")
+            else:
+                logger.error(f"FFmpeg install failed: {result.stderr[:200]}")
+        except Exception as e:
+            logger.error(f"FFmpeg install error: {e}")
+    else:
+        logger.info(f"FFmpeg found at: {shutil.which('ffmpeg')}")
+
     # Create indexes
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")

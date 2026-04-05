@@ -562,9 +562,11 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
               <div className="flex gap-2 flex-wrap">
                 {[
                   { id: 'cinematic', label: 'Cinematic', effects: ['ken_burns_in', 'pan_right', 'ken_burns_out', 'pan_left', 'ken_burns_in'] },
-                  { id: 'dynamic', label: 'Dynamic', effects: ['pan_left', 'ken_burns_in', 'pan_right', 'ken_burns_out', 'pan_up'] },
+                  { id: 'dynamic', label: 'Dynamic', effects: ['pan_left', 'ken_burns_in', 'slide_right', 'ken_burns_out', 'pan_up'] },
                   { id: 'smooth', label: 'Smooth', effects: ['fade_in', 'ken_burns_in', 'ken_burns_out', 'fade_out', 'ken_burns_in'] },
-                  { id: 'energetic', label: 'Energetic', effects: ['pan_left', 'pan_right', 'pan_up', 'pan_down', 'ken_burns_in'] },
+                  { id: 'energetic', label: 'Energetic', effects: ['slide_left', 'pan_right', 'slide_up', 'pan_down', 'ken_burns_in'] },
+                  { id: 'vintage_film', label: 'Vintage Film', effects: ['vintage', 'film_grain', 'vignette', 'ken_burns_in', 'glow'] },
+                  { id: 'dreamy', label: 'Dreamy', effects: ['glow', 'blur_in', 'ken_burns_in', 'fade_out', 'blur_out'] },
                 ].map(preset => (
                   <button
                     key={preset.id}
@@ -643,17 +645,36 @@ export default function StepMediaLibrary({ project, updateProject, projectId, cr
                           className="px-2 py-0.5 rounded text-[11px] font-medium bg-[#2a2a35] text-[#f8f8f8] border border-[#2a2a35] focus:border-[#00b4d8] focus:outline-none cursor-pointer"
                           data-testid={`effect-select-${item.id}`}
                         >
-                          <option value="ken_burns_in">Zoom In</option>
-                          <option value="ken_burns_out">Zoom Out</option>
-                          <option value="pan_left">Pan Left</option>
-                          <option value="pan_right">Pan Right</option>
-                          <option value="pan_up">Pan Up</option>
-                          <option value="pan_down">Pan Down</option>
-                          <option value="fade_in">Fade In</option>
-                          <option value="fade_out">Fade Out</option>
-                          <option value="blur_in">Blur In</option>
-                          <option value="blur_out">Blur Out</option>
-                          <option value="static">Static</option>
+                          <optgroup label="Motion">
+                            <option value="ken_burns_in">Zoom In</option>
+                            <option value="ken_burns_out">Zoom Out</option>
+                            <option value="pan_left">Pan Left</option>
+                            <option value="pan_right">Pan Right</option>
+                            <option value="pan_up">Pan Up</option>
+                            <option value="pan_down">Pan Down</option>
+                            <option value="zoom_rotate">Zoom + Rotate</option>
+                          </optgroup>
+                          <optgroup label="Slide">
+                            <option value="slide_left">Slide Left</option>
+                            <option value="slide_right">Slide Right</option>
+                            <option value="slide_up">Slide Up</option>
+                            <option value="slide_down">Slide Down</option>
+                          </optgroup>
+                          <optgroup label="Fade">
+                            <option value="fade_in">Fade In</option>
+                            <option value="fade_out">Fade Out</option>
+                            <option value="blur_in">Blur In</option>
+                            <option value="blur_out">Blur Out</option>
+                          </optgroup>
+                          <optgroup label="Style">
+                            <option value="vignette">Vignette</option>
+                            <option value="vintage">Vintage</option>
+                            <option value="glow">Glow</option>
+                            <option value="film_grain">Film Grain</option>
+                          </optgroup>
+                          <optgroup label="Basic">
+                            <option value="static">Static</option>
+                          </optgroup>
                         </select>
 
                         {/* Duration slider */}

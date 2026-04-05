@@ -14,6 +14,7 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
   const [detectionMessage, setDetectionMessage] = useState('');
   const [dragging, setDragging] = useState(null); // 'start' | 'end' | 'region' | null
   const dragOriginRef = useRef(null); // { time, climaxStart, climaxEnd } for region drag
+  const clickStartRef = useRef(null); // { x, y } to distinguish click from drag
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -103,11 +104,27 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
     }
   }, [dragging, pxToTime, project.climaxStart, project.climaxEnd, duration, updateProject]);
 
-  const handleMouseUp = useCallback(() => {
+  const handleMouseUp = useCallback((e) => {
+    if (dragging === 'region' && clickStartRef.current) {
+      const dx = Math.abs(e.clientX - clickStartRef.current.x);
+      const dy = Math.abs(e.clientY - clickStartRef.current.y);
+      // If barely moved, treat as click-to-seek
+      if (dx < 4 && dy < 4) {
+        const time = pxToTime(e.clientX);
+        if (wavesurferRef.current && time >= project.climaxStart && time <= project.climaxEnd) {
+          wavesurferRef.current.setTime(time);
+          setCurrentTime(time);
+          if (!isPlaying) {
+            wavesurferRef.current.play();
+          }
+        }
+      }
+    }
+    clickStartRef.current = null;
     if (dragging) {
       setDragging(null);
     }
-  }, [dragging]);
+  }, [dragging, pxToTime, project.climaxStart, project.climaxEnd, isPlaying]);
 
   // Attach global mouse listeners while dragging
   useEffect(() => {
@@ -378,9 +395,12 @@ export default function Step2SelectClimax({ project, updateProject, projectId, s
                   zIndex: 2,
                 }}
               />
-              {/* Selected region highlight (top + bottom border) — draggable */}
+              {/* Selected region highlight (top + bottom border) — draggable + click-to-seek */}
               <div
-                onMouseDown={handleMouseDown('region')}
+                onMouseDown={(e) => {
+                  clickStartRef.current = { x: e.clientX, y: e.clientY };
+                  handleMouseDown('region')(e);
+                }}
                 onTouchStart={handleTouchStart('region')}
                 style={{
                   position: 'absolute',
