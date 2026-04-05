@@ -16,17 +16,15 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 ### Library/MyMedia Mode (Done)
 - [x] Full pipeline: Song Input -> Climax -> Media Library -> Hooks -> Assemble -> Export
 - [x] 20 FFmpeg effects, 3 transitions, 6 presets, per-item controls
-- [x] **Zero AI credits** -- Pexels (free) + FFmpeg (local)
-- [x] **Smart video duration matching**: videos < audio -> repeat; videos > audio -> trim proportionally
+- [x] Zero AI credits -- Pexels (free) + FFmpeg (local)
+- [x] Smart video duration matching: videos < audio -> repeat; videos > audio -> trim proportionally
 
 ### Climax Selector (Done)
 - [x] Left/Right trim bars + middle region drag + click-to-seek
-- [x] Region drag stops playback, seeks to new start on release
 
 ### Hooks System (Done)
 - [x] Pure timeline segmentation: D/N per hook, sequential, full coverage, no gaps
 - [x] Multiline word wrapping (28 chars/line), auto font reduction for 4+ lines
-- [x] Each line = separate drawtext with centered y-offset
 
 ### Text Styling (Done)
 - [x] Font (Sans/Serif/Mono/Narrow), Size (S/M/L), Color (5), Position (Top/Mid/Bot)
@@ -38,19 +36,22 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - [x] FFmpeg filters: eq, colorbalance, vignette, noise, gblur per style
 - [x] Applied AFTER fades but BEFORE text (text stays crisp)
 - [x] Library mode only -- AI Mode untouched
-- [x] Frontend selector grid with preview tints
 
 ### Hook Readability (Done - Apr 5, 2026)
 - [x] Semi-transparent drawbox background pill (black@0.5) behind hook text
-- [x] 900px width, 16px vertical padding, centered
-- [x] Synced to hook timing via enable='between(t,start,end)'
-- [x] Live preview shows pill effect
+- [x] 900px width, 16px vertical padding, centered, synced to hook timing
 
 ### Pexels API Caching (Done - Apr 5, 2026)
-- [x] MongoDB pexels_cache collection with 24h TTL
-- [x] Cache key: type:query:page:per_page
-- [x] TTL index on expires_at, unique index on cache_key
-- [x] Both photos and videos endpoints cached
+- [x] MongoDB pexels_cache with 24h TTL, unique cache_key index
+
+### Assembly Pipeline Stability (Done - Apr 5, 2026)
+- [x] Moved assembly_jobs from in-memory dict to MongoDB collection
+- [x] Jobs survive server restarts/hot-reloads (no more 404 on polling)
+- [x] Jobs NOT deleted on first status read (persist until 1hr TTL auto-cleanup)
+- [x] Frontend: adaptive polling (2s -> 4s -> 6s intervals)
+- [x] Frontend: tolerates 404 (5 retries), 502/503 (continues), 401 (15 retries)
+- [x] Frontend: retryApiCall wrapper for still-to-clip/trim-video (3 retries with backoff)
+- [x] FFmpeg preset 'veryfast' (2-3x faster encoding, negligible quality loss at CRF 23)
 
 ### Assembly (Done)
 - [x] Async background job, 401-resilient polling, FFmpeg auto-install
@@ -65,6 +66,9 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - [x] Hooks response parsing -- data.hooks not data.concept.hooks
 - [x] Polling 401 -- silent retry with counter
 - [x] Animation status case mismatch
+- [x] Assembly 404s from in-memory job store lost on server restart (P0 - Fixed Apr 5)
+- [x] Assembly 404s from immediate job deletion on first status read (P0 - Fixed Apr 5)
+- [x] trim-video 401 from no retry logic during prepare phase (P0 - Fixed Apr 5)
 
 ## Test Credentials
 - Email: test@example.com | Password: test123456
