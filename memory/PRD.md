@@ -19,13 +19,14 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - [x] Song Input, Climax, Visual Concept, Generate Images, Animate Clips (FAL.AI), Assemble (async), Export
 
 ### Library/MyMedia Mode (Done)
-- [x] Song Input, Climax, Media Library (Pexels search + uploads + AI prompts), Hooks & Text, Assemble, Export
+- [x] Song Input, Climax, Media Library (Pexels + uploads + AI prompts), Hooks, Assemble, Export
 - [x] FFmpeg visual effects system (NO AI animation calls)
 - [x] 20 effects in 5 categories: Motion (7), Slide (4), Fade (4), Style (4), Basic (1)
 - [x] 3 transitions: Crossfade, Hard Cut, Fade to Black
 - [x] 6 presets: Cinematic, Dynamic, Smooth, Energetic, Vintage Film, Dreamy
-- [x] Per-item effect selector dropdown with optgroups + duration slider
-- [x] Preset buttons apply effect patterns across all media items
+- [x] Per-item effect selector with categorized optgroups
+- [x] Per-item transition selector (Crossfade/Cut/Fade Black)
+- [x] Duration slider per image
 
 ### Climax Selector (Done)
 - [x] Custom React-rendered draggable trim bars (mp3cut.net style)
@@ -35,17 +36,18 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 - [x] Time labels, highlighted range, touch support
 
 ### Hooks System (Done)
-- [x] Even distribution across full video timeline
-- [x] Fewer hooks than clips → evenly spaced across total duration
-- [x] More hooks than clips → 1 per clip, extras dropped
-- [x] No hook repeats
+- [x] Clip-aligned distribution: hooks mapped to specific clip indices, not just time segments
+- [x] Formula: round(i * (numClips-1) / max(numHooks-1, 1)) — evenly spaces hooks across clips
+- [x] MIN_HOOK_DURATION = 2.5s — each hook stays readable
+- [x] No repeats; extras dropped if more hooks than clips
 
 ### Text Styling Controls (Done)
-- [x] Size: Small / Medium / Large
+- [x] Font Family: Sans, Serif, Mono, Narrow (Liberation fonts)
+- [x] Size: Small (40px) / Medium (56px) / Large (72px)
 - [x] Color: White, Yellow, Red, Cyan, Lime
 - [x] Position: Top / Middle / Bottom
 - [x] Style: Shadow, Outline, Glow, None
-- [x] All sent to backend and applied via FFmpeg drawtext filters
+- [x] All applied via FFmpeg drawtext filters with font files
 
 ### Assembly System (Done)
 - [x] Async background job with polling
@@ -60,7 +62,19 @@ Build a full-stack web app called "Music Video Factory" for creating short music
 ## Test Credentials
 - Email: test@example.com | Password: test123456
 
+## Key Backend Endpoints
+- POST /api/projects/{id}/media/still-to-clip — effect param (20 options)
+- GET /api/effects/list — 20 effects, 3 transitions, 6 presets
+- POST /api/video/assemble — async, accepts textFont/textSize/textColor/textPosition/textStyle
+- GET /api/auth/test-keys — includes pexels status
+
+## Architecture Note
+- AI Mode path: Uses FAL.AI for animation, Together AI for images, OpenAI for prompts
+- Library Mode path: Uses FFmpeg for all clip creation, no external AI API calls for video
+- server.py is monolithic (~3200 lines) — refactoring deferred per user request
+
 ## Next Tasks / Backlog
+- [ ] Text entrance/exit animations (fade, slide text in) (P2)
 - [ ] Exact subtitle sync via Whisper (word-level timestamps) (P2)
 - [ ] Manual video trim in/out selection for stock clips (P2)
 - [ ] Direct publishing to TikTok, YouTube, Instagram (P3)
