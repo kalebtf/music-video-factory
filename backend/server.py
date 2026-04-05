@@ -844,7 +844,7 @@ async def still_to_clip(project_id: str, request: Request, data: dict):
         'ffmpeg', '-y',
         '-loop', '1', '-i', str(image_path),
         '-vf', vf + fade_filter,
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
         '-t', str(duration), '-pix_fmt', 'yuv420p',
     ]
     if needs_fps_flag:
@@ -860,7 +860,7 @@ async def still_to_clip(project_id: str, request: Request, data: dict):
         cmd_fallback = [
             'ffmpeg', '-y', '-loop', '1', '-i', str(image_path),
             '-vf', f'{base_scale}',
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
             '-t', str(duration), '-pix_fmt', 'yuv420p', '-r', '30',
             str(output_path)
         ]
@@ -942,7 +942,7 @@ async def trim_video(project_id: str, request: Request, data: dict):
         'ffmpeg', '-y', '-i', str(video_path),
         '-t', str(max_duration),
         '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
         '-r', '30', '-an',
         str(output_path)
     ]
@@ -2723,9 +2723,26 @@ async def get_project_clip(project_id: str, filename: str, request: Request):
 # ========================================
 
 # In-memory job store for assembly tasks
-assembly_jobs: Dict[str, Dict[str, Any]] = {}
-
 MAX_SUBTITLE_LINES = 15
+
+# Assembly jobs stored in MongoDB for persistence across hot reloads / restarts
+async def _get_assembly_job(job_id: str) -> Optional[Dict[str, Any]]:
+    doc = await db.assembly_jobs.find_one({"jobId": job_id}, {"_id": 0})
+    return doc
+
+async def _set_assembly_job(job_id: str, data: Dict[str, Any]):
+    data["jobId"] = job_id
+    await db.assembly_jobs.update_one(
+        {"jobId": job_id},
+        {"$set": data},
+        upsert=True
+    )
+
+async def _update_assembly_job(job_id: str, updates: Dict[str, Any]):
+    await db.assembly_jobs.update_one(
+        {"jobId": job_id},
+        {"$set": updates}
+    )
 
 class AssembleVideoRequest(BaseModel):
     projectId: str
@@ -2749,7 +2766,6 @@ class AssembleVideoRequest(BaseModel):
 
 async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, project: dict):
     """Background task: runs FFmpeg assembly and updates job status."""
-    job = assembly_jobs[job_id]
     try:
         clips_dir = PROJECTS_DIR / data.projectId / "clips"
         final_dir = PROJECTS_DIR / data.projectId / "final"
@@ -2769,10 +2785,10 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
                     clip_paths.append(str(clip_path))
 
         if len(clip_paths) < 1:
-            job.update({"status": "failed", "error": "No valid clips found on disk"})
+            await _update_assembly_job(job_id, {"status": "failed", "error": "No valid clips found on disk"})
             return
 
-        job["message"] = "Reading audio..."
+        await _update_assembly_job(job_id, {"message": "Reading audio..."})
 
         audio_path_raw = project.get("audioClimaxPath") or project.get("audioOriginalPath")
         audio_path = None
@@ -2813,7 +2829,7 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         total_clip_duration = sum(clip_durations) if clip_durations else 5.0
         output_path = final_dir / "video.mp4"
 
-        job["message"] = "Concatenating clips..."
+        await _update_assembly_job(job_id, {"message": "Concatenating clips..."})
 
         concat_file = final_dir / "concat.txt"
         async with aiofiles.open(concat_file, 'w') as f:
@@ -2843,7 +2859,7 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         if result.returncode != 0:
             logger.error(f"FFmpeg concat error: {result.stderr}")
 
-        job["message"] = "Adding overlays and encoding..."
+        await _update_assembly_job(job_id, {"message": "Adding overlays and encoding..."})
 
         # Build filter for text overlay (hooks + subtitles)
         filter_parts = []
@@ -3139,7 +3155,7 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
         else:
             final_cmd.extend(['-an'])
         final_cmd.extend([
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
             '-r', '30', '-s', '1080x1920',
             str(output_path)
         ])
@@ -3149,7 +3165,7 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
 
         if result.returncode != 0:
             logger.error(f"FFmpeg assembly error: {result.stderr[:1000]}")
-            job["message"] = "Primary render failed, trying fallback..."
+            await _update_assembly_job(job_id, {"message": "Primary render failed, trying fallback..."})
 
             fallback_filter = 'fade=t=in:st=0:d=1'
             if audio_duration > 0:
@@ -3157,7 +3173,7 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
             fallback_cmd = ['ffmpeg', '-y', '-i', str(concat_output)]
             if audio_path and Path(audio_path).exists():
                 fallback_cmd.extend(['-i', audio_path])
-            fallback_cmd.extend(['-vf', fallback_filter, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-r', '30', '-s', '1080x1920'])
+            fallback_cmd.extend(['-vf', fallback_filter, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-r', '30', '-s', '1080x1920'])
             if audio_path and Path(audio_path).exists():
                 fallback_cmd.extend(['-c:a', 'aac', '-b:a', '128k', '-shortest'])
             else:
@@ -3193,7 +3209,7 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
             {"$set": {"finalVideoPath": str(output_path), "status": "done"}}
         )
 
-        job.update({
+        await _update_assembly_job(job_id, {
             "status": "completed",
             "message": "Video assembled successfully",
             "videoUrl": f"/api/projects/{data.projectId}/final/video.mp4",
@@ -3202,12 +3218,13 @@ async def _run_assembly(job_id: str, data: AssembleVideoRequest, user_id: str, p
             "subtitlesCapped": subtitles_capped,
             "originalSubtitleCount": original_subtitle_count,
             "usedSubtitleCount": min(original_subtitle_count, MAX_SUBTITLE_LINES) if subtitles_capped else original_subtitle_count,
+            "completedAt": datetime.now(timezone.utc).isoformat(),
         })
         logger.info(f"Assembly job {job_id} completed successfully")
 
     except Exception as e:
         logger.error(f"Assembly job {job_id} failed: {e}")
-        job.update({"status": "failed", "error": str(e), "message": f"Assembly failed: {str(e)}"})
+        await _update_assembly_job(job_id, {"status": "failed", "error": str(e), "message": f"Assembly failed: {str(e)}"})
 
 
 @api_router.post("/video/assemble")
@@ -3230,12 +3247,12 @@ async def assemble_video(data: AssembleVideoRequest, request: Request):
         raise HTTPException(status_code=400, detail="Need at least 1 clip to assemble video")
 
     job_id = str(uuid.uuid4())
-    assembly_jobs[job_id] = {
+    await _set_assembly_job(job_id, {
         "status": "processing",
         "message": "Starting assembly...",
         "projectId": data.projectId,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-    }
+        "createdAt": datetime.now(timezone.utc),
+    })
 
     asyncio.create_task(_run_assembly(job_id, data, user["_id"], project))
 
@@ -3247,7 +3264,7 @@ async def get_assembly_status(job_id: str, request: Request):
     """Poll for assembly job status."""
     await get_current_user(request)
 
-    job = assembly_jobs.get(job_id)
+    job = await _get_assembly_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Assembly job not found")
 
@@ -3267,11 +3284,8 @@ async def get_assembly_status(job_id: str, request: Request):
             "originalSubtitleCount": job.get("originalSubtitleCount", 0),
             "usedSubtitleCount": job.get("usedSubtitleCount", 0),
         })
-        # Clean up job after successful retrieval
-        del assembly_jobs[job_id]
     elif job["status"] == "failed":
         response["error"] = job.get("error", "Unknown error")
-        del assembly_jobs[job_id]
 
     return response
 
@@ -3428,6 +3442,8 @@ async def startup():
     await db.templates.create_index("userId")
     await db.pexels_cache.create_index("cache_key", unique=True)
     await db.pexels_cache.create_index("expires_at", expireAfterSeconds=0)
+    await db.assembly_jobs.create_index("jobId", unique=True)
+    await db.assembly_jobs.create_index("createdAt", expireAfterSeconds=3600)  # Auto-clean after 1hr
     logger.info("Database indexes created")
 
     # Log registered routes for debugging

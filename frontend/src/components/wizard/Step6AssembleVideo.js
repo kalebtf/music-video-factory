@@ -3,7 +3,7 @@ import { GripVertical, Play, RefreshCw, Loader2, Film, AlertCircle, CheckCircle2
 import api from '../../lib/api';
 import { AuthImage, AuthVideo } from '../AuthImage';
 
-const POLL_INTERVAL = 3000;
+// Polling uses adaptive intervals (see pollJobStatus)
 
 export default function Step6AssembleVideo({ project, updateProject, projectId }) {
   const [assembling, setAssembling] = useState(false);
@@ -30,20 +30,25 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
 
   useEffect(() => {
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (pollRef.current) clearTimeout(pollRef.current);
     };
   }, []);
 
   const pollJobStatus = (jid) => {
     let authRetries = 0;
-    pollRef.current = setInterval(async () => {
+    let notFoundRetries = 0;
+    let pollCount = 0;
+    const MAX_NOT_FOUND = 5;  // Tolerate 404s during startup/restart
+
+    const doPoll = async () => {
       try {
         const { data } = await api.get(`/video/assemble/${jid}/status`);
-        authRetries = 0; // reset on success
+        authRetries = 0;
+        notFoundRetries = 0;
         setStatusMessage(data.message || 'Processing...');
 
         if (data.status === 'completed') {
-          clearInterval(pollRef.current);
+          clearTimeout(pollRef.current);
           pollRef.current = null;
           setAssembling(false);
           setJobId(null);
@@ -60,33 +65,67 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
               used: data.usedSubtitleCount,
             });
           }
+          return; // Stop polling
         } else if (data.status === 'failed') {
-          clearInterval(pollRef.current);
+          clearTimeout(pollRef.current);
           pollRef.current = null;
           setAssembling(false);
           setJobId(null);
           setError(data.error || 'Video assembly failed. Please try again.');
+          return; // Stop polling
         }
       } catch (err) {
-        // On 401, the axios interceptor will attempt token refresh.
-        // If refresh succeeds, the retried request resolves normally above.
-        // If refresh fails (no valid refresh token), we silently wait and retry
-        // since the backend job continues independently.
         const status = err.response?.status;
         if (status === 401) {
           authRetries++;
-          if (authRetries > 10) {
-            clearInterval(pollRef.current);
+          if (authRetries > 15) {
+            clearTimeout(pollRef.current);
             pollRef.current = null;
             setAssembling(false);
             setError('Session expired. Please refresh the page and check your video on the dashboard.');
+            return;
           }
-          // Otherwise silently skip this poll cycle — interceptor handles refresh
+        } else if (status === 404) {
+          notFoundRetries++;
+          if (notFoundRetries > MAX_NOT_FOUND) {
+            clearTimeout(pollRef.current);
+            pollRef.current = null;
+            setAssembling(false);
+            setError('Assembly job lost. The server may have restarted. Please try again.');
+            return;
+          }
+          // Tolerate temporary 404s (server restart, job not yet registered)
+          setStatusMessage('Waiting for assembly job...');
+        } else if (status === 502 || status === 503) {
+          // Gateway errors during heavy FFmpeg load — just wait and retry
+          setStatusMessage('Server busy, waiting...');
         } else {
           console.error('Polling error:', err);
         }
       }
-    }, POLL_INTERVAL);
+
+      // Adaptive polling: 2s for first 10 polls, then 4s, then 6s
+      pollCount++;
+      const interval = pollCount <= 10 ? 2000 : pollCount <= 30 ? 4000 : 6000;
+      pollRef.current = setTimeout(doPoll, interval);
+    };
+
+    // Start first poll after 2 seconds
+    pollRef.current = setTimeout(doPoll, 2000);
+  };
+
+  // Retry wrapper for API calls during media preparation
+  const retryApiCall = async (fn, maxRetries = 3) => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (attempt === maxRetries) throw err;
+        const delay = attempt * 1500; // 1.5s, 3s, 4.5s
+        console.warn(`API call failed (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
   };
 
   // Prepare library media items into clips before assembly (FFmpeg effects only — no AI)
@@ -141,8 +180,7 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
       }
     }
 
-    // Process items in original order, then append video repeats
-    let itemIndex = 0;
+    // Process items in original order with retry logic
     for (let i = 0; i < approvedMedia.length; i++) {
       const item = approvedMedia[i];
       const isImage = item.type === 'stock-photo' || item.type === 'upload-image';
@@ -150,28 +188,32 @@ export default function Step6AssembleVideo({ project, updateProject, projectId }
 
       if (isImage) {
         try {
-          const { data } = await api.post(`/projects/${projectId}/media/still-to-clip`, {
-            imagePath: item.localPath,
-            duration: item.stillDuration || 4,
-            effect: item.effect || 'ken_burns_in',
-          });
+          const { data } = await retryApiCall(() =>
+            api.post(`/projects/${projectId}/media/still-to-clip`, {
+              imagePath: item.localPath,
+              duration: item.stillDuration || 4,
+              effect: item.effect || 'ken_burns_in',
+            })
+          );
           preparedClipPaths.push(data.clipPath);
         } catch (err) {
-          console.error(`Still-to-clip failed for item ${i}:`, err);
+          console.error(`Still-to-clip failed for item ${i} after retries:`, err);
         }
       }
       // Videos handled via videoRepeatPlan below
     }
 
-    // Process video clips from the repeat plan
+    // Process video clips from the repeat plan with retry logic
     for (let vi = 0; vi < videoRepeatPlan.length; vi++) {
       const vp = videoRepeatPlan[vi];
       setPrepareStatus(`Processing video ${vi + 1} of ${videoRepeatPlan.length}...`);
       try {
-        const { data } = await api.post(`/projects/${projectId}/media/trim-video`, {
-          videoPath: vp.item.localPath,
-          maxDuration: vp.duration,
-        });
+        const { data } = await retryApiCall(() =>
+          api.post(`/projects/${projectId}/media/trim-video`, {
+            videoPath: vp.item.localPath,
+            maxDuration: vp.duration,
+          })
+        );
         preparedClipPaths.push(data.clipPath);
       } catch (err) {
         console.error('Video trim failed:', err);
