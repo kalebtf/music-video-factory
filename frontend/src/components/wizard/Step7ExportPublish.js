@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Download, Copy, Check, Film, ArrowRight, Smartphone, Loader2, Wand2, ImageIcon, Clock, CheckCheck } from 'lucide-react';
-import { AuthVideo, AuthImage } from '../AuthImage';
+import { AuthVideo, AuthImage, tryRefreshToken } from '../AuthImage';
 import api from '../../lib/api';
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL;
@@ -56,10 +56,19 @@ export default function Step7ExportPublish({ project, updateProject, projectId, 
     setDownloading(platformId);
     try {
       const downloadUrl = `${API}/projects/${projectId}/download/${platformId}`;
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(downloadUrl, {
+      let token = localStorage.getItem('access_token');
+      let response = await fetch(downloadUrl, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
+      // Refresh token on 401 and retry
+      if (response.status === 401) {
+        const newToken = await tryRefreshToken();
+        if (newToken) {
+          response = await fetch(downloadUrl, {
+            headers: { 'Authorization': `Bearer ${newToken}` }
+          });
+        }
+      }
       if (!response.ok) throw new Error('Download failed');
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -82,10 +91,19 @@ export default function Step7ExportPublish({ project, updateProject, projectId, 
     setDownloading('zip');
     try {
       const downloadUrl = `${API}/projects/${projectId}/download-zip`;
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(downloadUrl, {
+      let token = localStorage.getItem('access_token');
+      let response = await fetch(downloadUrl, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
+      // Refresh token on 401 and retry
+      if (response.status === 401) {
+        const newToken = await tryRefreshToken();
+        if (newToken) {
+          response = await fetch(downloadUrl, {
+            headers: { 'Authorization': `Bearer ${newToken}` }
+          });
+        }
+      }
       if (!response.ok) throw new Error('Download failed');
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);

@@ -6,13 +6,49 @@ function getToken() {
   return localStorage.getItem('access_token');
 }
 
-// Fetch authenticated media using fetch() (not axios) to avoid XHR blob responseType errors
+// Try to refresh the access token using the refresh token
+async function tryRefreshToken() {
+  const refreshToken = localStorage.getItem('refresh_token');
+  if (!refreshToken) return null;
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${refreshToken}`,
+      },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.access_token) {
+      localStorage.setItem('access_token', data.access_token);
+      return data.access_token;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Fetch authenticated media with auto-refresh on 401
 async function fetchAuthMedia(apiPath) {
   const token = getToken();
   const url = `${API_BASE}/api/${apiPath}`;
-  const res = await fetch(url, {
+
+  let res = await fetch(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
+
+  // On 401, try refreshing the token and retry once
+  if (res.status === 401) {
+    const newToken = await tryRefreshToken();
+    if (newToken) {
+      res = await fetch(url, {
+        headers: { Authorization: `Bearer ${newToken}` },
+      });
+    }
+  }
+
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const blob = await res.blob();
   return URL.createObjectURL(blob);
@@ -178,3 +214,4 @@ export function AuthVideo({ src, className, controls, playsInline, autoPlay, mut
 }
 
 export default AuthImage;
+export { tryRefreshToken };
